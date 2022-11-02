@@ -40,28 +40,28 @@ static const float image_rgb_test_vertices[4][5] = {
         -1.0f, /* y */
         0.0f,  /* z */
         0.0f,  /* u */
-        1.0f,  /* v */
+        0.0f,  /* v */
     },
     {
         1.0f,
         -1.0f,
         0.0f,
         1.0f,
-        1.0f,
+        0.0f,
     },
     {
         -1.0f,
         1.0f,
         0.0f,
         0.0f,
-        0.0f,
+        1.0f,
     },
     {
         1.0f,
         1.0f,
         0.0f,
         1.0f,
-        0.0f,
+        1.0f,
     },
 };
 
@@ -88,11 +88,14 @@ image_rgb_test_init(struct image_rgb_test *test)
 
     egl_init(egl, test->width, test->height);
 
+    if (!strstr(egl->gl_exts, "GL_OES_EGL_image_external"))
+        egl_die("no GL_OES_EGL_image_external");
+
     test->tex_target = GL_TEXTURE_EXTERNAL_OES;
     gl->GenTextures(1, &test->tex);
     gl->BindTexture(test->tex_target, test->tex);
     gl->TexParameterf(test->tex_target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    gl->TexParameterf(test->tex_target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl->TexParameterf(test->tex_target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl->TexParameteri(test->tex_target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl->TexParameteri(test->tex_target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -130,20 +133,17 @@ image_rgb_test_draw(struct image_rgb_test *test)
 
     gl->UseProgram(test->prog->prog);
     gl->BindTexture(test->tex_target, test->tex);
-    egl_check(egl, "setup 0");
 
     gl->Uniform1i(0, 0);
-    egl_check(egl, "setup 1a");
     gl->ActiveTexture(GL_TEXTURE0);
-    egl_check(egl, "setup 1b");
 
-    gl->VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(image_rgb_test_vertices[0]), image_rgb_test_vertices);
+    gl->VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(image_rgb_test_vertices[0]),
+                            image_rgb_test_vertices);
     gl->EnableVertexAttribArray(0);
-    egl_check(egl, "setup 3");
 
-    gl->VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(image_rgb_test_vertices[0]), &image_rgb_test_vertices[0][3]);
+    gl->VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(image_rgb_test_vertices[0]),
+                            &image_rgb_test_vertices[0][3]);
     gl->EnableVertexAttribArray(1);
-    egl_check(egl, "setup 4");
 
     egl_check(egl, "setup");
 
