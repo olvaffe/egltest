@@ -197,7 +197,7 @@ egl_alloc_bo_storage(struct egl *egl, struct egl_bo *bo)
         egl_die("failed to create ahb");
 
     AHardwareBuffer_describe(bo->ahb, &desc);
-    bo->stride = desc.stride;
+    bo->stride = desc.stride * 4;
 }
 
 static inline void
