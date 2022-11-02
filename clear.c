@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* This test clears a linear color image and dumps it to a file. */
+/* This test clears the pbuffer to red and dumps it to a file. */
 
 #include "eglutil.h"
 

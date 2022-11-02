@@ -12,6 +12,7 @@
 #include <GLES2/gl2ext.h>
 #include <GLES3/gl32.h>
 #include <assert.h>
+#include <ctype.h>
 #include <dlfcn.h>
 #include <drm_fourcc.h>
 #include <fcntl.h>
@@ -69,19 +70,22 @@ struct egl {
     EGLint major;
     EGLint minor;
 
-    const char *exts;
+    const char *dpy_exts;
     bool KHR_no_config_context;
     bool EXT_image_dma_buf_import;
     bool EXT_image_dma_buf_import_modifiers;
     bool ANDROID_get_native_client_buffer;
     bool ANDROID_image_native_buffer;
 
-    EGLConfig config;
-    EGLSurface surf;
-    EGLContext ctx;
-
     struct gbm_device *gbm;
     int gbm_fd;
+
+    EGLConfig config;
+    EGLSurface surf;
+
+    EGLContext ctx;
+
+    const char *gl_exts;
 };
 
 struct egl_program {
@@ -93,8 +97,8 @@ struct egl_program {
 struct egl_bo_info {
     int width;
     int height;
-    int flags;
     int drm_format;
+    /* DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR or vendor ones */
     uint64_t drm_modifier;
 };
 
@@ -154,106 +158,6 @@ egl_check(struct egl *egl, const char *where)
         if (gl_err != GL_NO_ERROR)
             egl_die("%s: gl has error 0x%04x", where, gl_err);
     }
-}
-
-static inline void
-egl_init_dispatch(struct egl *egl)
-{
-    /* we assume EGL 1.5, which includes EGL_EXT_client_extensions and
-     * EGL_KHR_client_get_all_proc_addresses
-     */
-#define PFN_EGL_EXT(proc, name) egl->name = (PFNEGL##proc##PROC)egl->GetProcAddress("egl" #name);
-#define PFN_GL_EXT(proc, name) egl->gl.name = (PFNGL##proc##PROC)egl->GetProcAddress("gl" #name);
-#define PFN_EGL(proc, name)                                                                      \
-    PFN_EGL_EXT(proc, name)                                                                      \
-    if (!egl->name)                                                                              \
-        egl_die("no egl" #name);
-#define PFN_GL(proc, name)                                                                       \
-    PFN_GL_EXT(proc, name)                                                                       \
-    if (!egl->gl.name)                                                                           \
-        egl_die("no gl" #name);
-#include "eglutil_entrypoints.inc"
-}
-
-static inline void
-egl_init_library(struct egl *egl)
-{
-    egl->handle = dlopen(LIBEGL_NAME, RTLD_LOCAL | RTLD_LAZY);
-    if (!egl->handle)
-        egl_die("failed to load %s: %s", LIBEGL_NAME, dlerror());
-
-    const char gipa_name[] = "eglGetProcAddress";
-    egl->GetProcAddress = dlsym(egl->handle, gipa_name);
-    if (!egl->GetProcAddress)
-        egl_die("failed to find %s: %s", gipa_name, dlerror());
-
-    egl_init_dispatch(egl);
-
-    egl->client_exts = egl->QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
-    if (!egl->client_exts)
-        egl_die("no client extension");
-}
-
-static inline void
-egl_init_display(struct egl *egl)
-{
-    const bool EXT_device_enumeration = strstr(egl->client_exts, "EGL_EXT_device_enumeration");
-    const bool EXT_device_query = strstr(egl->client_exts, "EGL_EXT_device_query");
-    const bool EXT_platform_device = strstr(egl->client_exts, "EGL_EXT_platform_device");
-    const bool KHR_platform_android = strstr(egl->client_exts, "EGL_KHR_platform_android");
-
-    if (EXT_device_enumeration && EXT_device_query && EXT_platform_device) {
-        egl_log("using platform device");
-
-        EGLDeviceEXT devs[16];
-        EGLint count;
-        if (!egl->QueryDevicesEXT(ARRAY_SIZE(devs), devs, &count))
-            egl_die("failed to query devices");
-
-        egl->dev = EGL_NO_DEVICE_EXT;
-        for (int i = 0; i < count; i++) {
-            const char *exts = egl->QueryDeviceStringEXT(devs[i], EGL_EXTENSIONS);
-            /* EGL_EXT_device_drm_render_node and not EGL_MESA_device_software */
-            if (strstr(exts, "EGL_EXT_device_drm_render_node") && !strstr(exts, "software")) {
-                egl->dev = devs[i];
-                break;
-            }
-        }
-        if (egl->dev == EGL_NO_DEVICE_EXT)
-            egl_die("failed to find a hw rendernode device");
-
-        egl->dpy = egl->GetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, egl->dev, NULL);
-    } else if (KHR_platform_android) {
-        egl_log("using platform android");
-
-        egl->dev = EGL_NO_DEVICE_EXT;
-        egl->dpy = egl->GetPlatformDisplay(EGL_PLATFORM_ANDROID_KHR, EGL_DEFAULT_DISPLAY, NULL);
-    } else {
-        egl_die("no supported platform extension");
-    }
-
-    if (egl->dpy == EGL_NO_DISPLAY)
-        egl_die("failed to get platform display");
-
-    if (!egl->Initialize(egl->dpy, &egl->major, &egl->minor))
-        egl_die("failed to initialize display");
-
-    if (egl->major != 1 || egl->minor < 5)
-        egl_die("EGL 1.5 is required");
-}
-
-static inline void
-egl_init_extensions(struct egl *egl)
-{
-    egl->exts = egl->QueryString(egl->dpy, EGL_EXTENSIONS);
-
-    egl->KHR_no_config_context = strstr(egl->exts, "EGL_KHR_no_config_context");
-    egl->EXT_image_dma_buf_import = strstr(egl->exts, "EGL_EXT_image_dma_buf_import");
-    egl->EXT_image_dma_buf_import_modifiers =
-        strstr(egl->exts, "EGL_EXT_image_dma_buf_import_modifiers");
-    egl->ANDROID_get_native_client_buffer =
-        strstr(egl->exts, "EGL_ANDROID_get_native_client_buffer");
-    egl->ANDROID_image_native_buffer = strstr(egl->exts, "EGL_ANDROID_image_native_buffer");
 }
 
 #ifdef __ANDROID__
@@ -450,6 +354,108 @@ egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
 #endif /* __ANDROID__ */
 
 static inline void
+egl_init_library_dispatch(struct egl *egl)
+{
+    /* we assume EGL 1.5, which includes EGL_EXT_client_extensions and
+     * EGL_KHR_client_get_all_proc_addresses
+     */
+#define PFN_EGL_EXT(proc, name) egl->name = (PFNEGL##proc##PROC)egl->GetProcAddress("egl" #name);
+#define PFN_GL_EXT(proc, name) egl->gl.name = (PFNGL##proc##PROC)egl->GetProcAddress("gl" #name);
+#define PFN_EGL(proc, name)                                                                      \
+    PFN_EGL_EXT(proc, name)                                                                      \
+    if (!egl->name)                                                                              \
+        egl_die("no egl" #name);
+#define PFN_GL(proc, name)                                                                       \
+    PFN_GL_EXT(proc, name)                                                                       \
+    if (!egl->gl.name)                                                                           \
+        egl_die("no gl" #name);
+#include "eglutil_entrypoints.inc"
+}
+
+static inline void
+egl_init_library(struct egl *egl)
+{
+    egl->handle = dlopen(LIBEGL_NAME, RTLD_LOCAL | RTLD_LAZY);
+    if (!egl->handle)
+        egl_die("failed to load %s: %s", LIBEGL_NAME, dlerror());
+
+    const char gipa_name[] = "eglGetProcAddress";
+    egl->GetProcAddress = dlsym(egl->handle, gipa_name);
+    if (!egl->GetProcAddress)
+        egl_die("failed to find %s: %s", gipa_name, dlerror());
+
+    egl_init_library_dispatch(egl);
+
+    egl->client_exts = egl->QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (!egl->client_exts)
+        egl_die("no client extension");
+}
+
+static inline void
+egl_init_display_extensions(struct egl *egl)
+{
+    egl->dpy_exts = egl->QueryString(egl->dpy, EGL_EXTENSIONS);
+
+    egl->KHR_no_config_context = strstr(egl->dpy_exts, "EGL_KHR_no_config_context");
+    egl->EXT_image_dma_buf_import = strstr(egl->dpy_exts, "EGL_EXT_image_dma_buf_import");
+    egl->EXT_image_dma_buf_import_modifiers =
+        strstr(egl->dpy_exts, "EGL_EXT_image_dma_buf_import_modifiers");
+    egl->ANDROID_get_native_client_buffer =
+        strstr(egl->dpy_exts, "EGL_ANDROID_get_native_client_buffer");
+    egl->ANDROID_image_native_buffer = strstr(egl->dpy_exts, "EGL_ANDROID_image_native_buffer");
+}
+
+static inline void
+egl_init_display(struct egl *egl)
+{
+    const bool EXT_device_enumeration = strstr(egl->client_exts, "EGL_EXT_device_enumeration");
+    const bool EXT_device_query = strstr(egl->client_exts, "EGL_EXT_device_query");
+    const bool EXT_platform_device = strstr(egl->client_exts, "EGL_EXT_platform_device");
+    const bool KHR_platform_android = strstr(egl->client_exts, "EGL_KHR_platform_android");
+
+    if (EXT_device_enumeration && EXT_device_query && EXT_platform_device) {
+        egl_log("using platform device");
+
+        EGLDeviceEXT devs[16];
+        EGLint count;
+        if (!egl->QueryDevicesEXT(ARRAY_SIZE(devs), devs, &count))
+            egl_die("failed to query devices");
+
+        egl->dev = EGL_NO_DEVICE_EXT;
+        for (int i = 0; i < count; i++) {
+            const char *exts = egl->QueryDeviceStringEXT(devs[i], EGL_EXTENSIONS);
+            /* EGL_EXT_device_drm_render_node and not EGL_MESA_device_software */
+            if (strstr(exts, "EGL_EXT_device_drm_render_node") && !strstr(exts, "software")) {
+                egl->dev = devs[i];
+                break;
+            }
+        }
+        if (egl->dev == EGL_NO_DEVICE_EXT)
+            egl_die("failed to find a hw rendernode device");
+
+        egl->dpy = egl->GetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, egl->dev, NULL);
+    } else if (KHR_platform_android) {
+        egl_log("using platform android");
+
+        egl->dev = EGL_NO_DEVICE_EXT;
+        egl->dpy = egl->GetPlatformDisplay(EGL_PLATFORM_ANDROID_KHR, EGL_DEFAULT_DISPLAY, NULL);
+    } else {
+        egl_die("no supported platform extension");
+    }
+
+    if (egl->dpy == EGL_NO_DISPLAY)
+        egl_die("failed to get platform display");
+
+    if (!egl->Initialize(egl->dpy, &egl->major, &egl->minor))
+        egl_die("failed to initialize display");
+
+    if (egl->major != 1 || egl->minor < 5)
+        egl_die("EGL 1.5 is required");
+
+    egl_init_display_extensions(egl);
+}
+
+static inline void
 egl_init_config_and_surface(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
 {
     const bool with_pbuffer = pbuffer_width && pbuffer_height;
@@ -515,6 +521,14 @@ egl_init_context(struct egl *egl)
 }
 
 static inline void
+egl_init_gl(struct egl *egl)
+{
+    egl->gl_exts = egl->gl.GetString(GL_EXTENSIONS);
+    if (!egl->gl_exts)
+        egl_die("no GLES extensions");
+}
+
+static inline void
 egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
 {
     memset(egl, 0, sizeof(*egl));
@@ -525,9 +539,6 @@ egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
     egl_init_display(egl);
     egl_check(egl, "init display");
 
-    egl_init_extensions(egl);
-    egl_check(egl, "init extensions");
-
     egl_init_bo_allocator(egl);
     egl_check(egl, "init bo allocator");
 
@@ -536,6 +547,9 @@ egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
 
     egl_init_context(egl);
     egl_check(egl, "init context");
+
+    egl_init_gl(egl);
+    egl_check(egl, "init gl");
 }
 
 static inline void
@@ -553,6 +567,23 @@ egl_cleanup(struct egl *egl)
     egl->ReleaseThread();
 
     dlclose(egl->handle);
+}
+
+static inline const void *
+egl_parse_ppm(const void *ppm_data, size_t ppm_size, int *width, int *height)
+{
+    if (sscanf(ppm_data, "P6 %d %d 255\n", width, height) != 2)
+        egl_die("invalid ppm header");
+
+    const size_t img_size = *width * *height * 3;
+    if (img_size >= ppm_size)
+        egl_die("bad ppm dimension %dx%d", *width, *height);
+
+    const size_t hdr_size = ppm_size - img_size;
+    if (!isspace(((const char *)ppm_data)[hdr_size - 1]))
+        egl_die("no space at the end of ppm header");
+
+    return ppm_data + hdr_size;
 }
 
 static inline void
@@ -676,13 +707,11 @@ egl_create_bo(struct egl *egl, const struct egl_bo_info *info)
 }
 
 static inline struct egl_bo *
-egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data)
+egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size)
 {
     int width;
     int height;
-    if (sscanf(ppm_data, "P6 %d %d 255\n", &width, &height) != 2)
-        egl_die("invalid ppm data");
-    const void *data = strchr(ppm_data, '\n') + 1;
+    ppm_data = egl_parse_ppm(ppm_data, ppm_size, &width, &height);
 
     const struct egl_bo_info bo_info = {
         .width = width,
@@ -696,10 +725,10 @@ egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data)
     for (int y = 0; y < height; y++) {
         uint8_t *dst = map + bo->stride * y;
         for (int x = 0; x < width; x++) {
-            memcpy(dst, data, 3);
+            memcpy(dst, ppm_data, 3);
             dst[3] = 0xff;
 
-            data += 3;
+            ppm_data += 3;
             dst += 4;
         }
     }

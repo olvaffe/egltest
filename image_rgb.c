@@ -98,7 +98,8 @@ image_rgb_test_init(struct image_rgb_test *test)
 
     test->prog = egl_create_program(egl, image_rgb_test_vs, image_rgb_test_fs);
 
-    test->bo = egl_create_bo_from_ppm(egl, image_rgb_test_ppm_data);
+    test->bo =
+        egl_create_bo_from_ppm(egl, image_rgb_test_ppm_data, sizeof(image_rgb_test_ppm_data));
     test->img = egl_create_image(egl, test->bo);
     gl->EGLImageTargetTexture2DOES(test->tex_target, test->img->img);
 
