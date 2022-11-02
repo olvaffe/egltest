@@ -1,0 +1,25 @@
+[constants]
+ndk_root = '/usr/lib/android-ndk'
+ndk_bin = ndk_root / 'toolchains/llvm/prebuilt/linux-x86_64/bin'
+arch = 'aarch64'
+common_flags = ['-target', arch + '-linux-android28']
+
+[binaries]
+ar = ndk_bin / 'llvm-ar'
+c = ndk_bin / 'clang'
+strip = ndk_bin / 'llvm-strip'
+pkgconfig = '/usr/bin/pkg-config'
+
+[built-in options]
+c_args = common_flags + []
+c_link_args = common_flags + []
+
+[properties]
+sys_root = '/notexist'
+pkg_config_libdir = '/notexist'
+
+[host_machine]
+system = 'android'
+cpu_family = arch
+cpu = arch
+endian = 'little'

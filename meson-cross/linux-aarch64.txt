@@ -1,0 +1,25 @@
+[constants]
+toolchain_prefix = '/usr/bin/aarch64-linux-gnu-'
+sysroot = '/chroots/debian-testing-arm64'
+arch = 'aarch64'
+common_flags = ['--sysroot', sysroot]
+
+[binaries]
+ar = toolchain_prefix + 'ar'
+c = toolchain_prefix + 'gcc'
+strip = toolchain_prefix + 'strip'
+pkgconfig = '/usr/bin/pkg-config'
+
+[built-in options]
+c_args = common_flags + []
+c_link_args = common_flags + []
+
+[properties]
+sys_root = sysroot
+pkg_config_libdir = sysroot + '/usr/lib/aarch64-linux-gnu/pkgconfig:' + sysroot + '/usr/share/pkgconfig'
+
+[host_machine]
+system = 'linux'
+cpu_family = arch
+cpu = arch
+endian = 'little'
