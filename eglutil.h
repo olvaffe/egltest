@@ -84,6 +84,12 @@ struct egl {
     int gbm_fd;
 };
 
+struct egl_program {
+    GLuint vs;
+    GLuint fs;
+    GLuint prog;
+};
+
 struct egl_bo_info {
     int width;
     int height;
@@ -98,6 +104,7 @@ struct egl_bo {
 
     AHardwareBuffer *ahb;
     struct gbm_bo *bo;
+    void *bo_xfer;
 };
 
 struct egl_image {
@@ -295,6 +302,24 @@ egl_free_bo_storage(struct egl *egl, struct egl_bo *bo)
     AHardwareBuffer_release(bo->ahb);
 }
 
+static inline void
+egl_map_bo_storage(struct egl *egl, struct egl_bo *bo)
+{
+    const uint64_t usage =
+        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+    const ARect rect = {.right = bo->info.width, .bottom = bo->info.heigh } void * map;
+    if (AHardwareBuffer_lock(bo->ahb, usage, -1, 0, bo->info.width, bo->info.height, &rect, &map))
+        egl_die("failed to lock ahb");
+
+    return map;
+}
+
+static inline void
+egl_unmap_bo_storage(struct egl *egl, struct egl_bo *bo)
+{
+    AHardwareBuffer_unlock(bo->ahb, NULL);
+}
+
 static inline EGLImage
 egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
 {
@@ -305,7 +330,13 @@ egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
     if (!buf)
         egl_die("failed to get client buffer from ahb");
 
-    return egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, buf, NULL);
+    const EGLAttrib img_attrs[] = {
+        EGL_IMAGE_PRESERVED,
+        EGL_TRUE,
+        EGL_NONE,
+    };
+
+    return egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, buf, img_attrs);
 }
 
 #else /* __ANDROID__ */
@@ -336,8 +367,12 @@ egl_cleanup_bo_allocator(struct egl *egl)
 static inline void
 egl_alloc_bo_storage(struct egl *egl, struct egl_bo *bo)
 {
-    bo->bo = gbm_bo_create_with_modifiers2(egl->gbm, bo->info.width, bo->info.height,
-                                           bo->info.drm_format, &bo->info.drm_modifier, 1, 0);
+    if (bo->info.drm_modifier != DRM_FORMAT_MOD_INVALID) {
+        bo->bo = gbm_bo_create_with_modifiers2(egl->gbm, bo->info.width, bo->info.height,
+                                               bo->info.drm_format, &bo->info.drm_modifier, 1, 0);
+    } else {
+        bo->bo = gbm_bo_create(egl->gbm, bo->info.width, bo->info.height, bo->info.drm_format, 0);
+    }
     if (!bo->bo)
         egl_die("failed to create gbm bo");
 
@@ -348,6 +383,29 @@ static inline void
 egl_free_bo_storage(struct egl *egl, struct egl_bo *bo)
 {
     gbm_bo_destroy(bo->bo);
+}
+
+static inline void *
+egl_map_bo_storage(struct egl *egl, struct egl_bo *bo)
+{
+    if (bo->bo_xfer)
+        egl_die("recursive map");
+
+    uint32_t stride;
+    void *map = gbm_bo_map(bo->bo, 0, 0, bo->info.width, bo->info.height,
+                           GBM_BO_TRANSFER_READ_WRITE, &stride, &bo->bo_xfer);
+    if (!map)
+        egl_die("failed to map bo");
+    if (stride != (uint32_t)bo->stride)
+        egl_die("unexpected map stride %d", stride);
+
+    return map;
+}
+
+static inline void
+egl_unmap_bo_storage(struct egl *egl, struct egl_bo *bo)
+{
+    gbm_bo_unmap(bo->bo, bo->bo_xfer);
 }
 
 static inline EGLImage
@@ -361,6 +419,8 @@ egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
         egl_die("failed to export gbm bo");
 
     const EGLAttrib img_attrs[] = {
+        EGL_IMAGE_PRESERVED,
+        EGL_TRUE,
         EGL_DMA_BUF_PLANE0_FD_EXT,
         fd,
         EGL_DMA_BUF_PLANE0_OFFSET_EXT,
@@ -533,6 +593,75 @@ egl_dump_image(struct egl *egl, int width, int height, const char *filename)
     free(data);
 }
 
+static inline GLuint
+egl_compile_shader(struct egl *egl, GLenum type, const char *glsl)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    GLuint sh = gl->CreateShader(type);
+    gl->ShaderSource(sh, 1, &glsl, NULL);
+    gl->CompileShader(sh);
+
+    GLint val;
+    gl->GetShaderiv(sh, GL_COMPILE_STATUS, &val);
+    if (val != GL_TRUE) {
+        char info_log[1024];
+        gl->GetShaderInfoLog(sh, sizeof(info_log), NULL, info_log);
+        egl_die("failed to compile shader: %s", info_log);
+    }
+
+    return sh;
+}
+
+static inline GLuint
+egl_link_program(struct egl *egl, const GLuint *shaders, int count)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    GLuint prog = gl->CreateProgram();
+    for (int i = 0; i < count; i++)
+        gl->AttachShader(prog, shaders[i]);
+    gl->LinkProgram(prog);
+
+    GLint val;
+    gl->GetProgramiv(prog, GL_LINK_STATUS, &val);
+    if (val != GL_TRUE) {
+        char info_log[1024];
+        gl->GetProgramInfoLog(prog, sizeof(info_log), NULL, info_log);
+        egl_die("failed to link program: %s", info_log);
+    }
+
+    return prog;
+}
+
+static inline struct egl_program *
+egl_create_program(struct egl *egl, const char *vs_glsl, const char *fs_glsl)
+{
+    struct egl_program *prog = calloc(1, sizeof(*prog));
+    if (!prog)
+        egl_die("failed to alloc prog");
+
+    prog->vs = egl_compile_shader(egl, GL_VERTEX_SHADER, vs_glsl);
+    prog->fs = egl_compile_shader(egl, GL_FRAGMENT_SHADER, fs_glsl);
+
+    const GLuint shaders[] = { prog->vs, prog->fs };
+    prog->prog = egl_link_program(egl, shaders, ARRAY_SIZE(shaders));
+
+    return prog;
+}
+
+static inline void
+egl_destroy_program(struct egl *egl, struct egl_program *prog)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    gl->DeleteProgram(prog->prog);
+    gl->DeleteShader(prog->vs);
+    gl->DeleteShader(prog->fs);
+
+    free(prog);
+}
+
 static inline struct egl_bo *
 egl_create_bo(struct egl *egl, const struct egl_bo_info *info)
 {
@@ -542,6 +671,40 @@ egl_create_bo(struct egl *egl, const struct egl_bo_info *info)
     bo->info = *info;
 
     egl_alloc_bo_storage(egl, bo);
+
+    return bo;
+}
+
+static inline struct egl_bo *
+egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data)
+{
+    int width;
+    int height;
+    if (sscanf(ppm_data, "P6 %d %d 255\n", &width, &height) != 2)
+        egl_die("invalid ppm data");
+    const void *data = strchr(ppm_data, '\n') + 1;
+
+    const struct egl_bo_info bo_info = {
+        .width = width,
+        .height = height,
+        .drm_format = DRM_FORMAT_ABGR8888,
+        .drm_modifier = DRM_FORMAT_MOD_INVALID,
+    };
+    struct egl_bo *bo = egl_create_bo(egl, &bo_info);
+
+    void *map = egl_map_bo_storage(egl, bo);
+    for (int y = 0; y < height; y++) {
+        uint8_t *dst = map + bo->stride * y;
+        for (int x = 0; x < width; x++) {
+            memcpy(dst, data, 3);
+            dst[3] = 0xff;
+
+            data += 3;
+            dst += 4;
+        }
+    }
+
+    egl_unmap_bo_storage(egl, bo);
 
     return bo;
 }

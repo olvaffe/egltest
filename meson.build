@@ -35,12 +35,27 @@ idep_eglutil = declare_dependency(
 
 tests = [
   'clear',
+  'image_rgb',
 ]
 
 foreach t : tests
+  asset_incs = []
+
+  ppm = t + '.ppm'
+  hdr = t + '_test.ppm.inc'
+  if fs.exists(ppm)
+    asset_incs += custom_target(
+      hdr,
+      input: [ppm],
+      output: [hdr],
+      command: [prog_xxd, '-i', '-n', t + '_test_ppm_data', '@INPUT@'],
+      capture: true,
+    )
+  endif
+
   executable(
     t,
-    sources: [t + '.c'],
+    sources: [t + '.c', asset_incs],
     dependencies: [idep_eglutil],
   )
 endforeach
