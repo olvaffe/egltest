@@ -388,8 +388,15 @@ egl_init_library(struct egl *egl)
     egl_init_library_dispatch(egl);
 
     egl->client_exts = egl->QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
-    if (!egl->client_exts)
+    if (!egl->client_exts) {
+#ifdef __ANDROID__
+        egl_log("no client extension");
+        egl->client_exts = "";
+        egl->GetError();
+#else
         egl_die("no client extension");
+#endif
+    }
 }
 
 static inline void
@@ -441,7 +448,9 @@ egl_init_display(struct egl *egl)
         egl->dev = EGL_NO_DEVICE_EXT;
         egl->dpy = egl->GetPlatformDisplay(EGL_PLATFORM_ANDROID_KHR, EGL_DEFAULT_DISPLAY, NULL);
     } else {
-        egl_die("no supported platform extension");
+        egl_log("using EGL_DEFAULT_DISPLAY");
+        egl->dev = EGL_NO_DEVICE_EXT;
+        egl->dpy = egl->GetDisplay(EGL_DEFAULT_DISPLAY);
     }
 
     if (egl->dpy == EGL_NO_DISPLAY)
@@ -450,10 +459,19 @@ egl_init_display(struct egl *egl)
     if (!egl->Initialize(egl->dpy, &egl->major, &egl->minor))
         egl_die("failed to initialize display");
 
-    if (egl->major != 1 || egl->minor < 5)
-        egl_die("EGL 1.5 is required");
-
     egl_init_display_extensions(egl);
+
+    if (egl->major != 1 || egl->minor < 5) {
+#ifdef __ANDROID__
+        egl_log("fixing up for EGL %d.%d", egl->major, egl->minor);
+        if (!strstr(egl->dpy_exts, "EGL_KHR_image_base"))
+            egl_die("no EGL_KHR_image_base");
+        egl->CreateImage = (PFNEGLCREATEIMAGEPROC)egl->GetProcAddress("eglCreateImageKHR");
+        egl->DestroyImage = (PFNEGLDESTROYIMAGEPROC)egl->GetProcAddress("eglDestroyImageKHR");
+#else
+        egl_die("EGL 1.5 is required");
+#endif
+    }
 }
 
 static inline void
