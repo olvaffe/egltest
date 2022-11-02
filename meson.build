@@ -24,12 +24,13 @@ warning_args = cc.get_supported_arguments([
 dep_dl = cc.find_library('dl')
 dep_m = cc.find_library('m', required: false)
 dep_gbm = cc.find_library('gbm', required: host_machine.system() != 'android')
+dep_nativewindow = cc.find_library('nativewindow', required: false)
 
 add_project_arguments(['-D_GNU_SOURCE', warning_args], language: 'c')
 
 idep_eglutil = declare_dependency(
   sources: ['eglutil.h'],
-  dependencies: [dep_dl, dep_m, dep_gbm],
+  dependencies: [dep_dl, dep_m, dep_gbm, dep_nativewindow],
   include_directories: ['include'],
 )
 

@@ -206,13 +206,14 @@ egl_free_bo_storage(struct egl *egl, struct egl_bo *bo)
     AHardwareBuffer_release(bo->ahb);
 }
 
-static inline void
+static inline void *
 egl_map_bo_storage(struct egl *egl, struct egl_bo *bo)
 {
     const uint64_t usage =
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
-    const ARect rect = {.right = bo->info.width, .bottom = bo->info.heigh } void * map;
-    if (AHardwareBuffer_lock(bo->ahb, usage, -1, 0, bo->info.width, bo->info.height, &rect, &map))
+    const ARect rect = { .right = bo->info.width, .bottom = bo->info.height };
+    void *map;
+    if (AHardwareBuffer_lock(bo->ahb, usage, -1, &rect, &map))
         egl_die("failed to lock ahb");
 
     return map;
@@ -523,7 +524,7 @@ egl_init_context(struct egl *egl)
 static inline void
 egl_init_gl(struct egl *egl)
 {
-    egl->gl_exts = egl->gl.GetString(GL_EXTENSIONS);
+    egl->gl_exts = (const char *)egl->gl.GetString(GL_EXTENSIONS);
     if (!egl->gl_exts)
         egl_die("no GLES extensions");
 }
