@@ -1090,6 +1090,11 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
         .mapping = true,
         .rendering = false,
         .sampling = true,
+
+	/* When mapping, gbm or gralloc is supposed to give us a linear view
+	 * even when the image is tiled.  But minigbm can be an exception
+	 * sometimes and we would need to set this to true instead.
+         */
         .force_linear = false,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
