@@ -94,7 +94,7 @@ struct egl_program {
     GLuint prog;
 };
 
-struct egl_bo_info {
+struct egl_image_info {
     int width;
     int height;
     int drm_format;
@@ -102,8 +102,7 @@ struct egl_bo_info {
     uint64_t drm_modifier;
 };
 
-struct egl_bo {
-    struct egl_bo_info info;
+struct egl_image_storage {
     int stride;
 
     AHardwareBuffer *ahb;
@@ -112,6 +111,8 @@ struct egl_bo {
 };
 
 struct egl_image {
+    struct egl_image_info info;
+    struct egl_image_storage storage;
     EGLImage img;
 };
 
@@ -163,22 +164,24 @@ egl_check(struct egl *egl, const char *where)
 #ifdef __ANDROID__
 
 static inline void
-egl_init_bo_allocator(struct egl *egl)
+egl_init_image_allocator(struct egl *egl)
 {
     egl->gbm_fd = -1;
 }
 
 static inline void
-egl_cleanup_bo_allocator(struct egl *egl)
+egl_cleanup_image_allocator(struct egl *egl)
 {
 }
 
 static inline void
-egl_alloc_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
-    if (bo->info.drm_format != DRM_FORMAT_ABGR8888)
+    const struct egl_image_info *info = &img->info;
+
+    if (info->drm_format != DRM_FORMAT_ABGR8888)
         egl_die("drm format must be ABGR8888");
-    if (bo->info.drm_modifier != DRM_FORMAT_MOD_INVALID)
+    if (info->drm_modifier != DRM_FORMAT_MOD_INVALID)
         egl_die("drm modifier must be DRM_FORMAT_MOD_INVALID");
 
     const uint32_t format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
@@ -187,51 +190,54 @@ egl_alloc_bo_storage(struct egl *egl, struct egl_bo *bo)
         AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
 
     AHardwareBuffer_Desc desc = {
-        .width = bo->info.width,
-        .height = bo->info.height,
+        .width = info->width,
+        .height = info->height,
         .layers = 1,
         .format = format,
         .usage = usage,
     };
-    if (AHardwareBuffer_allocate(&desc, &bo->ahb))
+    AHardwareBuffer *ahb;
+    if (AHardwareBuffer_allocate(&desc, &ahb))
         egl_die("failed to create ahb");
 
-    AHardwareBuffer_describe(bo->ahb, &desc);
-    bo->stride = desc.stride * 4;
+    AHardwareBuffer_describe(ahb, &desc);
+    img->storage.ahb = ahb;
+    img->storage.stride = desc.stride * 4;
 }
 
 static inline void
-egl_free_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_free_image_storage(struct egl *egl, struct egl_image *img)
 {
-    AHardwareBuffer_release(bo->ahb);
+    AHardwareBuffer_release(img->storage.ahb);
 }
 
 static inline void *
-egl_map_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_map_image_storage(struct egl *egl, struct egl_image *img)
 {
+    const struct egl_image_info *info = &img->info;
     const uint64_t usage =
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
-    const ARect rect = { .right = bo->info.width, .bottom = bo->info.height };
+    const ARect rect = { .right = info->width, .bottom = info->height };
     void *map;
-    if (AHardwareBuffer_lock(bo->ahb, usage, -1, &rect, &map))
+    if (AHardwareBuffer_lock(img->storage.ahb, usage, -1, &rect, &map))
         egl_die("failed to lock ahb");
 
     return map;
 }
 
 static inline void
-egl_unmap_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_unmap_image_storage(struct egl *egl, struct egl_image *img)
 {
-    AHardwareBuffer_unlock(bo->ahb, NULL);
+    AHardwareBuffer_unlock(img->storage.ahb, NULL);
 }
 
-static inline EGLImage
-egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
+static inline void
+egl_wrap_image_storage(struct egl *egl, struct egl_image *img)
 {
     if (!egl->ANDROID_get_native_client_buffer || !egl->ANDROID_image_native_buffer)
         egl_die("no ahb import support");
 
-    EGLClientBuffer buf = egl->GetNativeClientBufferANDROID(bo->ahb);
+    EGLClientBuffer buf = egl->GetNativeClientBufferANDROID(img->storage.ahb);
     if (!buf)
         egl_die("failed to get client buffer from ahb");
 
@@ -241,16 +247,19 @@ egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
         EGL_NONE,
     };
 
-    return egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, buf, img_attrs);
+    img->img =
+        egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, buf, img_attrs);
+    if (img->img == EGL_NO_IMAGE)
+        egl_die("failed to create img");
 }
 
 #else /* __ANDROID__ */
 
 static inline void
-egl_init_bo_allocator(struct egl *egl)
+egl_init_image_allocator(struct egl *egl)
 {
     if (egl->dev == EGL_NO_DEVICE_EXT)
-        egl_die("no device");
+        egl_die("gbm requires EGLDeviceEXT");
 
     const char *node = egl->QueryDeviceStringEXT(egl->dev, EGL_DRM_RENDER_NODE_FILE_EXT);
     egl->gbm_fd = open(node, O_RDWR | O_CLOEXEC);
@@ -263,63 +272,79 @@ egl_init_bo_allocator(struct egl *egl)
 }
 
 static inline void
-egl_cleanup_bo_allocator(struct egl *egl)
+egl_cleanup_image_allocator(struct egl *egl)
 {
     gbm_device_destroy(egl->gbm);
     close(egl->gbm_fd);
 }
 
 static inline void
-egl_alloc_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
-    if (bo->info.drm_modifier != DRM_FORMAT_MOD_INVALID) {
-        bo->bo = gbm_bo_create_with_modifiers2(egl->gbm, bo->info.width, bo->info.height,
-                                               bo->info.drm_format, &bo->info.drm_modifier, 1, 0);
+    const struct egl_image_info *info = &img->info;
+
+    struct gbm_bo *bo;
+    if (info->drm_modifier != DRM_FORMAT_MOD_INVALID) {
+        bo = gbm_bo_create_with_modifiers2(egl->gbm, info->width, info->height, info->drm_format,
+                                           &info->drm_modifier, 1, 0);
     } else {
-        bo->bo = gbm_bo_create(egl->gbm, bo->info.width, bo->info.height, bo->info.drm_format, 0);
+        bo = gbm_bo_create(egl->gbm, info->width, info->height, info->drm_format, 0);
     }
-    if (!bo->bo)
+    if (!bo)
         egl_die("failed to create gbm bo");
 
-    bo->stride = gbm_bo_get_stride_for_plane(bo->bo, 0);
+    img->storage.bo = bo;
+    img->storage.stride = gbm_bo_get_stride_for_plane(bo, 0);
 }
 
 static inline void
-egl_free_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_free_image_storage(struct egl *egl, struct egl_image *img)
 {
-    gbm_bo_destroy(bo->bo);
+    gbm_bo_destroy(img->storage.bo);
 }
 
 static inline void *
-egl_map_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_map_image_storage(struct egl *egl, struct egl_image *img)
 {
-    if (bo->bo_xfer)
+    const struct egl_image_info *info = &img->info;
+    struct egl_image_storage *storage = &img->storage;
+
+    if (storage->bo_xfer)
         egl_die("recursive map");
 
     uint32_t stride;
-    void *map = gbm_bo_map(bo->bo, 0, 0, bo->info.width, bo->info.height,
-                           GBM_BO_TRANSFER_READ_WRITE, &stride, &bo->bo_xfer);
+    void *map = gbm_bo_map(storage->bo, 0, 0, info->width, info->height,
+                           GBM_BO_TRANSFER_READ_WRITE, &stride, &storage->bo_xfer);
     if (!map)
         egl_die("failed to map bo");
-    if (stride != (uint32_t)bo->stride)
+    if (stride != (uint32_t)storage->stride)
         egl_die("unexpected map stride %d", stride);
 
     return map;
 }
 
 static inline void
-egl_unmap_bo_storage(struct egl *egl, struct egl_bo *bo)
+egl_unmap_image_storage(struct egl *egl, struct egl_image *img)
 {
-    gbm_bo_unmap(bo->bo, bo->bo_xfer);
+    struct egl_image_storage *storage = &img->storage;
+
+    if (!storage->bo_xfer)
+        egl_die("not mapped");
+
+    gbm_bo_unmap(storage->bo, storage->bo_xfer);
+    storage->bo_xfer = NULL;
 }
 
-static inline EGLImage
-egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
+static inline void
+egl_wrap_image_storage(struct egl *egl, struct egl_image *img)
 {
+    const struct egl_image_info *info = &img->info;
+    const struct egl_image_storage *storage = &img->storage;
+
     if (!egl->EXT_image_dma_buf_import || !egl->EXT_image_dma_buf_import_modifiers)
         egl_die("no dma-buf import support");
 
-    const int fd = gbm_bo_get_fd_for_plane(bo->bo, 0);
+    const int fd = gbm_bo_get_fd_for_plane(storage->bo, 0);
     if (fd < 0)
         egl_die("failed to export gbm bo");
 
@@ -331,25 +356,25 @@ egl_wrap_bo_storage(struct egl *egl, const struct egl_bo *bo)
         EGL_DMA_BUF_PLANE0_OFFSET_EXT,
         0,
         EGL_WIDTH,
-        bo->info.width,
+        info->width,
         EGL_HEIGHT,
-        bo->info.height,
+        info->height,
         EGL_DMA_BUF_PLANE0_PITCH_EXT,
-        bo->stride,
+        storage->stride,
         EGL_LINUX_DRM_FOURCC_EXT,
-        bo->info.drm_format,
+        info->drm_format,
         EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
-        (EGLint)bo->info.drm_modifier,
+        (EGLint)info->drm_modifier,
         EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
-        (EGLint)(bo->info.drm_modifier >> 32),
+        (EGLint)(info->drm_modifier >> 32),
         EGL_NONE,
     };
 
-    EGLImage img =
-        egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, img_attrs);
-    close(fd);
+    img->img = egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, img_attrs);
+    if (img->img == EGL_NO_IMAGE)
+        egl_die("failed to create img");
 
-    return img;
+    close(fd);
 }
 
 #endif /* __ANDROID__ */
@@ -558,8 +583,8 @@ egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
     egl_init_display(egl);
     egl_check(egl, "init display");
 
-    egl_init_bo_allocator(egl);
-    egl_check(egl, "init bo allocator");
+    egl_init_image_allocator(egl);
+    egl_check(egl, "init image allocator");
 
     egl_init_config_and_surface(egl, pbuffer_width, pbuffer_height);
     egl_check(egl, "init config and surface");
@@ -580,7 +605,7 @@ egl_cleanup(struct egl *egl)
     egl->DestroyContext(egl->dpy, egl->ctx);
     egl->DestroySurface(egl->dpy, egl->surf);
 
-    egl_cleanup_bo_allocator(egl);
+    egl_cleanup_image_allocator(egl);
 
     egl->Terminate(egl->dpy);
     egl->ReleaseThread();
@@ -712,37 +737,38 @@ egl_destroy_program(struct egl *egl, struct egl_program *prog)
     free(prog);
 }
 
-static inline struct egl_bo *
-egl_create_bo(struct egl *egl, const struct egl_bo_info *info)
+static inline struct egl_image *
+egl_create_image(struct egl *egl, const struct egl_image_info *info)
 {
-    struct egl_bo *bo = calloc(1, sizeof(*bo));
-    if (!bo)
-        egl_die("failed to alloc bo");
-    bo->info = *info;
+    struct egl_image *img = calloc(1, sizeof(*img));
+    if (!img)
+        egl_die("failed to alloc img");
 
-    egl_alloc_bo_storage(egl, bo);
+    img->info = *info;
+    egl_alloc_image_storage(egl, img);
+    egl_wrap_image_storage(egl, img);
 
-    return bo;
+    return img;
 }
 
-static inline struct egl_bo *
-egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size)
+static inline struct egl_image *
+egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size)
 {
     int width;
     int height;
     ppm_data = egl_parse_ppm(ppm_data, ppm_size, &width, &height);
 
-    const struct egl_bo_info bo_info = {
+    const struct egl_image_info img_info = {
         .width = width,
         .height = height,
         .drm_format = DRM_FORMAT_ABGR8888,
         .drm_modifier = DRM_FORMAT_MOD_INVALID,
     };
-    struct egl_bo *bo = egl_create_bo(egl, &bo_info);
+    struct egl_image *img = egl_create_image(egl, &img_info);
 
-    void *map = egl_map_bo_storage(egl, bo);
+    void *map = egl_map_image_storage(egl, img);
     for (int y = 0; y < height; y++) {
-        uint8_t *dst = map + bo->stride * y;
+        uint8_t *dst = map + img->storage.stride * y;
         for (int x = 0; x < width; x++) {
             memcpy(dst, ppm_data, 3);
             dst[3] = 0xff;
@@ -752,28 +778,7 @@ egl_create_bo_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size)
         }
     }
 
-    egl_unmap_bo_storage(egl, bo);
-
-    return bo;
-}
-
-static inline void
-egl_destroy_bo(struct egl *egl, struct egl_bo *bo)
-{
-    egl_free_bo_storage(egl, bo);
-    free(bo);
-}
-
-static inline struct egl_image *
-egl_create_image(struct egl *egl, const struct egl_bo *bo)
-{
-    struct egl_image *img = calloc(1, sizeof(*img));
-    if (!img)
-        egl_die("failed to alloc img");
-
-    img->img = egl_wrap_bo_storage(egl, bo);
-    if (img->img == EGL_NO_IMAGE)
-        egl_die("failed to create img");
+    egl_unmap_image_storage(egl, img);
 
     return img;
 }
@@ -782,6 +787,7 @@ static inline void
 egl_destroy_image(struct egl *egl, struct egl_image *img)
 {
     egl->DestroyImage(egl->dpy, img->img);
+    egl_free_image_storage(egl, img);
     free(img);
 }
 

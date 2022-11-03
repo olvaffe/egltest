@@ -23,17 +23,18 @@ static const char image_rgb_test_vs[] = "#version 320 es\n"
                                         "    out_texcoord = (tex_transform * in_texcoord).xy;\n"
                                         "}\n";
 
-static const char image_rgb_test_fs[] = "#version 320 es\n"
-                                        "#extension GL_OES_EGL_image_external : require\n"
-                                        "precision mediump float;\n"
-                                        "layout(location = 1, binding = 0) uniform samplerExternalOES tex;\n"
-                                        "layout(location = 0) in vec2 in_texcoord;\n"
-                                        "layout(location = 0) out vec4 out_color;\n"
-                                        "\n"
-                                        "void main()\n"
-                                        "{\n"
-                                        "    out_color = texture2D(tex, in_texcoord);\n"
-                                        "}\n";
+static const char image_rgb_test_fs[] =
+    "#version 320 es\n"
+    "#extension GL_OES_EGL_image_external : require\n"
+    "precision mediump float;\n"
+    "layout(location = 1, binding = 0) uniform samplerExternalOES tex;\n"
+    "layout(location = 0) in vec2 in_texcoord;\n"
+    "layout(location = 0) out vec4 out_color;\n"
+    "\n"
+    "void main()\n"
+    "{\n"
+    "    out_color = texture2D(tex, in_texcoord);\n"
+    "}\n";
 
 static const float image_rgb_test_vertices[4][5] = {
     {
@@ -91,7 +92,6 @@ struct image_rgb_test {
 
     struct egl_program *prog;
 
-    struct egl_bo *bo;
     struct egl_image *img;
 };
 
@@ -116,9 +116,8 @@ image_rgb_test_init(struct image_rgb_test *test)
 
     test->prog = egl_create_program(egl, image_rgb_test_vs, image_rgb_test_fs);
 
-    test->bo =
-        egl_create_bo_from_ppm(egl, image_rgb_test_ppm_data, sizeof(image_rgb_test_ppm_data));
-    test->img = egl_create_image(egl, test->bo);
+    test->img =
+        egl_create_image_from_ppm(egl, image_rgb_test_ppm_data, sizeof(image_rgb_test_ppm_data));
     gl->EGLImageTargetTexture2DOES(test->tex_target, test->img->img);
 
     egl_check(egl, "init");
@@ -133,7 +132,6 @@ image_rgb_test_cleanup(struct image_rgb_test *test)
 
     egl_destroy_program(egl, test->prog);
     egl_destroy_image(egl, test->img);
-    egl_destroy_bo(egl, test->bo);
     egl_cleanup(egl);
 }
 
