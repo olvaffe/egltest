@@ -175,7 +175,7 @@ egl_cleanup_image_allocator(struct egl *egl)
 }
 
 static inline enum AHardwareBuffer_Format
-drm_format_to_ahb_format(int drm_format)
+egl_drm_format_to_ahb_format(int drm_format)
 {
     switch (drm_format) {
     case DRM_FORMAT_ABGR8888:
@@ -361,40 +361,50 @@ egl_unmap_image_storage(struct egl *egl, struct egl_image *img)
     storage->bo_xfer = NULL;
 }
 
+static inline int
+egl_image_to_dma_buf_attrs(const struct egl_image *img, EGLAttrib *attrs, int count)
+{
+    const struct egl_image_info *info = &img->info;
+    struct gbm_bo *bo = img->storage.bo;
+
+    const int fd = gbm_bo_get_fd_for_plane(bo, 0);
+    if (fd < 0)
+        egl_die("failed to export gbm bo");
+    const int stride = gbm_bo_get_stride_for_plane(bo, 0);
+
+    assert(count >= 64);
+    int c = 0;
+    attrs[c++] = EGL_IMAGE_PRESERVED;
+    attrs[c++] = EGL_TRUE;
+    attrs[c++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+    attrs[c++] = fd;
+    attrs[c++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+    attrs[c++] = 0;
+    attrs[c++] = EGL_WIDTH;
+    attrs[c++] = info->width;
+    attrs[c++] = EGL_HEIGHT;
+    attrs[c++] = info->height;
+    attrs[c++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+    attrs[c++] = stride;
+    attrs[c++] = EGL_LINUX_DRM_FOURCC_EXT;
+    attrs[c++] = info->drm_format;
+    attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+    attrs[c++] = (EGLAttrib)info->drm_modifier;
+    attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+    attrs[c++] = (EGLAttrib)(info->drm_modifier >> 32);
+    attrs[c++] = EGL_NONE, assert(c <= count);
+
+    return fd;
+}
+
 static inline void
 egl_wrap_image_storage(struct egl *egl, struct egl_image *img)
 {
-    const struct egl_image_info *info = &img->info;
-    const struct egl_image_storage *storage = &img->storage;
-
     if (!egl->EXT_image_dma_buf_import || !egl->EXT_image_dma_buf_import_modifiers)
         egl_die("no dma-buf import support");
 
-    const int fd = gbm_bo_get_fd_for_plane(storage->bo, 0);
-    if (fd < 0)
-        egl_die("failed to export gbm bo");
-
-    const EGLAttrib img_attrs[] = {
-        EGL_IMAGE_PRESERVED,
-        EGL_TRUE,
-        EGL_DMA_BUF_PLANE0_FD_EXT,
-        fd,
-        EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-        0,
-        EGL_WIDTH,
-        info->width,
-        EGL_HEIGHT,
-        info->height,
-        EGL_DMA_BUF_PLANE0_PITCH_EXT,
-        storage->stride,
-        EGL_LINUX_DRM_FOURCC_EXT,
-        info->drm_format,
-        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
-        (EGLint)info->drm_modifier,
-        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
-        (EGLint)(info->drm_modifier >> 32),
-        EGL_NONE,
-    };
+    EGLAttrib img_attrs[64];
+    const int fd = egl_image_to_dma_buf_attrs(img, img_attrs, ARRAY_SIZE(img_attrs));
 
     img->img = egl->CreateImage(egl->dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, img_attrs);
     if (img->img == EGL_NO_IMAGE)
