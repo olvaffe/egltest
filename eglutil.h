@@ -973,10 +973,8 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
                 ppm_data += 3;
 
                 const int write_count = (x | y) & 1 ? 1 : 3;
-                for (int i = 0; i < write_count; i++) {
-                    rows[i][0] = yuv[i];
-                    rows[i] += map.pixel_strides[i];
-                }
+                for (int i = 0; i < write_count; i++)
+                    rows[i][map.pixel_strides[i] * x] = yuv[i];
             }
         }
     } else {
