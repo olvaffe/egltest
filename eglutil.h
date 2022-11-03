@@ -16,6 +16,7 @@
 #include <dlfcn.h>
 #include <drm_fourcc.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -54,6 +55,13 @@ struct egl_gl {
 #include "eglutil_entrypoints.inc"
 };
 
+struct egl_format {
+    int drm_format;
+    int drm_modifier_count;
+    const EGLuint64KHR *drm_modifiers;
+    const EGLBoolean *external_only;
+};
+
 struct egl {
     struct {
         void *handle;
@@ -84,6 +92,9 @@ struct egl {
     EGLSurface surf;
 
     EGLContext ctx;
+
+    int format_count;
+    struct egl_format **formats;
 
     const char *gl_exts;
 };
@@ -744,6 +755,55 @@ egl_init_context(struct egl *egl)
 }
 
 static inline void
+egl_init_formats(struct egl *egl)
+{
+    if (!egl->EXT_image_dma_buf_import_modifiers)
+        return;
+
+    EGLint fmt_count;
+    if (!egl->QueryDmaBufFormatsEXT(egl->dpy, 0, NULL, &fmt_count))
+        egl_die("failed to get dma-buf format count");
+
+    struct egl_format **fmts = malloc(sizeof(*fmts) * fmt_count);
+    EGLint *drm_fmts = malloc(sizeof(*drm_fmts) * fmt_count);
+    if (!fmts || !drm_fmts)
+        egl_die("failed to alloc fmts");
+
+    if (!egl->QueryDmaBufFormatsEXT(egl->dpy, fmt_count, drm_fmts, &fmt_count))
+        egl_die("failed to get dma-buf formats");
+
+    for (int i = 0; i < fmt_count; i++) {
+        const EGLint drm_fmt = drm_fmts[i];
+
+        EGLint mod_count;
+        if (!egl->QueryDmaBufModifiersEXT(egl->dpy, drm_fmt, 0, NULL, NULL, &mod_count))
+            egl_die("failed to get dma-buf modifier count");
+
+        struct egl_format *fmt = malloc(sizeof(*fmt) + sizeof(fmt->drm_modifiers) * mod_count +
+                                        sizeof(fmt->external_only) * mod_count);
+        if (!fmt)
+            egl_die("failed to alloc fmt");
+        EGLuint64KHR *drm_modifiers = (EGLuint64KHR *)(fmt + 1);
+        EGLBoolean *external_only = (EGLBoolean *)(drm_modifiers + mod_count);
+
+        if (!egl->QueryDmaBufModifiersEXT(egl->dpy, drm_fmt, mod_count, drm_modifiers,
+                                          external_only, &mod_count))
+            egl_die("failed to get dma-buf modifiers");
+
+        fmt->drm_format = drm_fmt;
+        fmt->drm_modifier_count = mod_count;
+        fmt->drm_modifiers = drm_modifiers;
+        fmt->external_only = external_only;
+        fmts[i] = fmt;
+    }
+
+    free(drm_fmts);
+
+    egl->format_count = fmt_count;
+    egl->formats = fmts;
+}
+
+static inline void
 egl_init_gl(struct egl *egl)
 {
     egl->gl_exts = (const char *)egl->gl.GetString(GL_EXTENSIONS);
@@ -771,6 +831,9 @@ egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
     egl_init_context(egl);
     egl_check(egl, "init context");
 
+    egl_init_formats(egl);
+    egl_check(egl, "init formats");
+
     egl_init_gl(egl);
     egl_check(egl, "init gl");
 }
@@ -779,6 +842,12 @@ static inline void
 egl_cleanup(struct egl *egl)
 {
     egl_check(egl, "cleanup");
+
+    if (egl->format_count) {
+        for (int i = 0; i < egl->format_count; i++)
+            free(egl->formats[i]);
+        free(egl->formats);
+    }
 
     egl->MakeCurrent(egl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     egl->DestroyContext(egl->dpy, egl->ctx);
@@ -790,6 +859,22 @@ egl_cleanup(struct egl *egl)
     egl->ReleaseThread();
 
     dlclose(egl->handle);
+}
+
+static inline void
+egl_dump_formats(struct egl *egl)
+{
+    for (int i = 0; i < egl->format_count; i++) {
+        const struct egl_format *fmt = egl->formats[i];
+
+        egl_log("format %d: %c%c%c%c (0x%08x)", i, (fmt->drm_format >> 0) & 0xff,
+                (fmt->drm_format >> 8) & 0xff, (fmt->drm_format >> 16) & 0xff,
+                (fmt->drm_format >> 24) & 0xff, fmt->drm_format);
+        for (int j = 0; j < fmt->drm_modifier_count; j++) {
+            egl_log("  modifier 0x%016" PRIx64 " external only %d", fmt->drm_modifiers[j],
+                    fmt->external_only[j]);
+        }
+    }
 }
 
 static inline const void *

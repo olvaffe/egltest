@@ -36,6 +36,7 @@ idep_eglutil = declare_dependency(
 
 tests = [
   'clear',
+  'formats',
   'image_rgb',
 ]
 
