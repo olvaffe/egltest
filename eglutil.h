@@ -109,8 +109,9 @@ struct egl_image_info {
     int width;
     int height;
     int drm_format;
-    /* DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR or vendor ones */
-    uint64_t drm_modifier;
+
+    bool mappable;
+    bool force_linear;
 };
 
 struct egl_image_storage {
@@ -284,8 +285,8 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
     const struct egl_image_info *info = &img->info;
 
-    if (info->drm_modifier != DRM_FORMAT_MOD_INVALID)
-        egl_die("drm modifier must be DRM_FORMAT_MOD_INVALID");
+    if (info->force_linear)
+        egl_log("cannot force linear in AHB");
 
     const enum AHardwareBuffer_Format format = egl_drm_format_to_ahb_format(info->drm_format);
     const uint64_t usage =
@@ -402,27 +403,64 @@ egl_cleanup_image_allocator(struct egl *egl)
     close(egl->gbm_fd);
 }
 
+static inline const struct egl_format *
+egl_find_format(const struct egl *egl, int drm_format)
+{
+    for (int i = 0; i < egl->format_count; i++) {
+        if (egl->formats[i]->drm_format == drm_format)
+            return egl->formats[i];
+    }
+    return NULL;
+}
+
+static inline const uint64_t *
+egl_find_modifier(const struct egl_format *fmt, uint64_t drm_modifier)
+{
+    for (int i = 0; i < fmt->drm_modifier_count; i++) {
+        if (fmt->drm_modifiers[i] == drm_modifier) {
+            return &fmt->drm_modifiers[i];
+        }
+    }
+    return NULL;
+}
+
 static inline void
 egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
     const struct egl_image_info *info = &img->info;
-    /* This is only to make minigbm happy.
-     *
-     * mesa gbm does not support planar.  When the format is planar, it must
-     * be minigbm and GBM_BO_USE_PROTECTED (bit 5) means GBM_BO_USE_TEXTURING
-     * to minigbm instead.
-     */
-    const uint32_t minigbm_flags = egl_drm_format_to_plane_count(info->drm_format) > 1
-                                       ? GBM_BO_USE_PROTECTED
-                                       : GBM_BO_USE_RENDERING;
 
-    struct gbm_bo *bo;
-    if (info->drm_modifier != DRM_FORMAT_MOD_INVALID) {
-        bo = gbm_bo_create_with_modifiers2(egl->gbm, info->width, info->height, info->drm_format,
-                                           &info->drm_modifier, 1, minigbm_flags);
+    const struct egl_format *fmt = egl_find_format(egl, info->drm_format);
+    if (!fmt)
+        egl_die("unsupported drm format 0x%08x", info->drm_format);
+
+    uint64_t drm_modifiers[32];
+    int drm_modifier_count = 0;
+
+    if (info->force_linear) {
+        if (!egl_find_modifier(fmt, DRM_FORMAT_MOD_LINEAR))
+            egl_die("failed to find linear modifier");
+
+        drm_modifiers[0] = DRM_FORMAT_MOD_LINEAR;
+        drm_modifier_count = 1;
     } else {
-        bo = gbm_bo_create(egl->gbm, info->width, info->height, info->drm_format, minigbm_flags);
+        for (int i = 0; i < fmt->drm_modifier_count; i++) {
+            const uint64_t mod = fmt->drm_modifiers[i];
+
+            /* skip modifiers that minigbm does not know how to map */
+            bool skip = false;
+            if (fourcc_mod_is_vendor(mod, INTEL))
+                skip = mod >= I915_FORMAT_MOD_Y_TILED_CCS;
+
+            if (!skip) {
+                drm_modifiers[drm_modifier_count++] = mod;
+                if (drm_modifier_count == ARRAY_SIZE(drm_modifiers))
+                    break;
+            }
+        }
     }
+
+    struct gbm_bo *bo = gbm_bo_create_with_modifiers(
+        egl->gbm, info->width, info->height, info->drm_format, drm_modifiers, drm_modifier_count);
     if (!bo)
         egl_die("failed to create gbm bo");
 
@@ -518,6 +556,7 @@ egl_image_to_dma_buf_attrs(const struct egl_image *img, EGLAttrib *attrs, int co
     const int fd = gbm_bo_get_fd_for_plane(bo, 0);
     if (fd < 0)
         egl_die("failed to export gbm bo");
+    const uint64_t drm_modifier = gbm_bo_get_modifier(bo);
     const int plane_count = gbm_bo_get_plane_count(bo);
     for (int i = 0; i < plane_count; i++) {
         const int offset = gbm_bo_get_offset(bo, i);
@@ -540,9 +579,9 @@ egl_image_to_dma_buf_attrs(const struct egl_image *img, EGLAttrib *attrs, int co
             attrs[c++] = stride;
         }
         attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT + 2 * i;
-        attrs[c++] = (EGLAttrib)info->drm_modifier;
+        attrs[c++] = (EGLAttrib)drm_modifier;
         attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT + 2 * i;
-        attrs[c++] = (EGLAttrib)(info->drm_modifier >> 32);
+        attrs[c++] = (EGLAttrib)(drm_modifier >> 32);
     }
 
     attrs[c++] = EGL_NONE;
@@ -1045,7 +1084,8 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
         .width = width,
         .height = height,
         .drm_format = planar ? DRM_FORMAT_NV12 : DRM_FORMAT_ABGR8888,
-        .drm_modifier = DRM_FORMAT_MOD_INVALID,
+        .mappable = true,
+        .force_linear = false,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
 
