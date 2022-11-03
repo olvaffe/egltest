@@ -174,17 +174,43 @@ egl_cleanup_image_allocator(struct egl *egl)
 {
 }
 
+static inline enum AHardwareBuffer_Format
+drm_format_to_ahb_format(int drm_format)
+{
+    switch (drm_format) {
+    case DRM_FORMAT_ABGR8888:
+        return AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+    case DRM_FORMAT_XBGR8888:
+        return AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM;
+    case DRM_FORMAT_BGR888:
+        return AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM;
+    case DRM_FORMAT_RGB565:
+        return AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM;
+    case DRM_FORMAT_ABGR16161616F:
+        return AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT;
+    case DRM_FORMAT_ABGR2101010:
+        return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
+    case DRM_FORMAT_R8:
+        return AHARDWAREBUFFER_FORMAT_BLOB;
+    case DRM_FORMAT_NV12:
+        /* there is no guarantee gralloc would pick NV12.. */
+        return AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+    case DRM_FORMAT_P010:
+        return AHARDWAREBUFFER_FORMAT_YCbCr_P010;
+    default:
+        egl_die("unsupported drm format 0x%x", drm_format);
+    }
+}
+
 static inline void
 egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
     const struct egl_image_info *info = &img->info;
 
-    if (info->drm_format != DRM_FORMAT_ABGR8888)
-        egl_die("drm format must be ABGR8888");
     if (info->drm_modifier != DRM_FORMAT_MOD_INVALID)
         egl_die("drm modifier must be DRM_FORMAT_MOD_INVALID");
 
-    const uint32_t format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+    const enum AHardwareBuffer_Format format = drm_format_to_ahb_format(info->drm_format);
     const uint64_t usage =
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY |
         AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
