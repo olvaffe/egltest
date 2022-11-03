@@ -451,10 +451,13 @@ egl_map_image_storage(struct egl *egl, struct egl_image *img, struct egl_image_m
                 egl_drm_format_to_cpp(egl_drm_format_to_plane_format(info->drm_format, i));
         }
 
-        /* Y and UV */
+        /* Y and UV, and 4:2:0 subsampling */
         if (map->plane_count == 2) {
+            map->row_strides[1] /= 2;
+            map->pixel_strides[1] /= 2;
+
             map->plane_count = 3;
-            map->planes[2] = map->planes[1] + map->pixel_strides[1] / 2;
+            map->planes[2] = map->planes[1] + map->pixel_strides[1];
             map->row_strides[2] = map->row_strides[1];
             map->pixel_strides[2] = map->pixel_strides[1];
         }
@@ -969,7 +972,8 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
                 egl_rgb_to_yuv(ppm_data, yuv);
                 ppm_data += 3;
 
-                for (int i = 0; i < map.plane_count; i++) {
+                const int write_count = (x | y) & 1 ? 1 : 3;
+                for (int i = 0; i < write_count; i++) {
                     rows[i][0] = yuv[i];
                     rows[i] += map.pixel_strides[i];
                 }
