@@ -216,7 +216,7 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
     if (info->drm_modifier != DRM_FORMAT_MOD_INVALID)
         egl_die("drm modifier must be DRM_FORMAT_MOD_INVALID");
 
-    const enum AHardwareBuffer_Format format = drm_format_to_ahb_format(info->drm_format);
+    const enum AHardwareBuffer_Format format = egl_drm_format_to_ahb_format(info->drm_format);
     const uint64_t usage =
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY |
         AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
