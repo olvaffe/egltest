@@ -103,10 +103,16 @@ struct egl_image_info {
 };
 
 struct egl_image_storage {
-    int stride;
-
     AHardwareBuffer *ahb;
     struct gbm_bo *bo;
+};
+
+struct egl_image_map {
+    int plane_count;
+    void *planes[3];
+    int row_strides[3];
+    int pixel_strides[3];
+
     void *bo_xfer;
 };
 
@@ -215,20 +221,15 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY |
         AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
 
-    AHardwareBuffer_Desc desc = {
+    const AHardwareBuffer_Desc desc = {
         .width = info->width,
         .height = info->height,
         .layers = 1,
         .format = format,
         .usage = usage,
     };
-    AHardwareBuffer *ahb;
-    if (AHardwareBuffer_allocate(&desc, &ahb))
+    if (AHardwareBuffer_allocate(&desc, &img->storage.ahb))
         egl_die("failed to create ahb");
-
-    AHardwareBuffer_describe(ahb, &desc);
-    img->storage.ahb = ahb;
-    img->storage.stride = desc.stride * 4;
 }
 
 static inline void
@@ -237,22 +238,44 @@ egl_free_image_storage(struct egl *egl, struct egl_image *img)
     AHardwareBuffer_release(img->storage.ahb);
 }
 
-static inline void *
-egl_map_image_storage(struct egl *egl, struct egl_image *img)
+static inline void
+egl_map_image_storage(struct egl *egl, const struct egl_image *img, struct egl_image_map *map)
 {
     const struct egl_image_info *info = &img->info;
     const uint64_t usage =
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
     const ARect rect = { .right = info->width, .bottom = info->height };
-    void *map;
-    if (AHardwareBuffer_lock(img->storage.ahb, usage, -1, &rect, &map))
+
+#if __ANDROID_API__ >= 29
+    AHardwareBuffer_Planes planes;
+    if (AHardwareBuffer_lockPlanes(img->storage.ahb, usage, -1, &rect, &planes))
         egl_die("failed to lock ahb");
 
-    return map;
+    map->plane_count = planes.planeCount;
+    for (int i = 0; i < map->plane_count; i++) {
+        map->planes[i] = planes.planes[i].data;
+        map->row_strides[i] = planes.planes[i].rowStride;
+        map->pixel_strides[i] = planes.planes[i].pixelStride;
+    }
+#else
+    void *ptr;
+    if (AHardwareBuffer_lock(img->storage.ahb, usage, -1, &rect, &ptr))
+        egl_die("failed to lock ahb");
+
+    AHardwareBuffer_Desc desc;
+    AHardwareBuffer_describe(img->storage.ahb, &desc);
+
+    /* TODO check format */
+    const int cpp = 4;
+    map->plane_count = 1;
+    map->planes[0] = ptr;
+    map->row_strides[0] = desc.stride * cpp;
+    map->pixel_strides[0] = cpp;
+#endif
 }
 
 static inline void
-egl_unmap_image_storage(struct egl *egl, struct egl_image *img)
+egl_unmap_image_storage(struct egl *egl, struct egl_image *img, struct egl_image_map *map)
 {
     AHardwareBuffer_unlock(img->storage.ahb, NULL);
 }
@@ -320,7 +343,6 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
         egl_die("failed to create gbm bo");
 
     img->storage.bo = bo;
-    img->storage.stride = gbm_bo_get_stride_for_plane(bo, 0);
 }
 
 static inline void
@@ -329,36 +351,32 @@ egl_free_image_storage(struct egl *egl, struct egl_image *img)
     gbm_bo_destroy(img->storage.bo);
 }
 
-static inline void *
-egl_map_image_storage(struct egl *egl, struct egl_image *img)
+static inline void
+egl_map_image_storage(struct egl *egl, struct egl_image *img, struct egl_image_map *map)
 {
     const struct egl_image_info *info = &img->info;
     struct egl_image_storage *storage = &img->storage;
 
-    if (storage->bo_xfer)
-        egl_die("recursive map");
-
     uint32_t stride;
-    void *map = gbm_bo_map(storage->bo, 0, 0, info->width, info->height,
-                           GBM_BO_TRANSFER_READ_WRITE, &stride, &storage->bo_xfer);
-    if (!map)
+    void *xfer = NULL;
+    void *ptr = gbm_bo_map(storage->bo, 0, 0, info->width, info->height,
+                           GBM_BO_TRANSFER_READ_WRITE, &stride, &xfer);
+    if (!ptr)
         egl_die("failed to map bo");
-    if (stride != (uint32_t)storage->stride)
-        egl_die("unexpected map stride %d", stride);
 
-    return map;
+    map->plane_count = 1;
+    map->planes[0] = ptr;
+    map->row_strides[0] = stride;
+    map->pixel_strides[0] = 4; /* TODO check format */
+    map->bo_xfer = xfer;
 }
 
 static inline void
-egl_unmap_image_storage(struct egl *egl, struct egl_image *img)
+egl_unmap_image_storage(struct egl *egl, struct egl_image *img, struct egl_image_map *map)
 {
     struct egl_image_storage *storage = &img->storage;
 
-    if (!storage->bo_xfer)
-        egl_die("not mapped");
-
-    gbm_bo_unmap(storage->bo, storage->bo_xfer);
-    storage->bo_xfer = NULL;
+    gbm_bo_unmap(storage->bo, map->bo_xfer);
 }
 
 static inline int
@@ -802,19 +820,21 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
 
-    void *map = egl_map_image_storage(egl, img);
+    struct egl_image_map map;
+    egl_map_image_storage(egl, img, &map);
+
     for (int y = 0; y < height; y++) {
-        uint8_t *dst = map + img->storage.stride * y;
+        uint8_t *dst = map.planes[0] + map.row_strides[0] * y;
         for (int x = 0; x < width; x++) {
             memcpy(dst, ppm_data, 3);
             dst[3] = 0xff;
 
             ppm_data += 3;
-            dst += 4;
+            dst += map.pixel_strides[0];
         }
     }
 
-    egl_unmap_image_storage(egl, img);
+    egl_unmap_image_storage(egl, img, &map);
 
     return img;
 }
