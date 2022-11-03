@@ -918,8 +918,27 @@ egl_create_image(struct egl *egl, const struct egl_image_info *info)
     return img;
 }
 
+static inline void
+egl_rgb_to_yuv(const uint8_t *rgb, uint8_t *yuv)
+{
+    const int tmp[3] = {
+        ((66 * (rgb)[0] + 129 * (rgb)[1] + 25 * (rgb)[2] + 128) >> 8) + 16,
+        ((-38 * (rgb)[0] - 74 * (rgb)[1] + 112 * (rgb)[2] + 128) >> 8) + 128,
+        ((112 * (rgb)[0] - 94 * (rgb)[1] - 18 * (rgb)[2] + 128) >> 8) + 128,
+    };
+
+    for (int i = 0; i < 3; i++) {
+        if (tmp[i] > 255)
+            yuv[i] = 255;
+        else if (tmp[i] < 0)
+            yuv[i] = 0;
+        else
+            yuv[i] = tmp[i];
+    }
+}
+
 static inline struct egl_image *
-egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size)
+egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size, bool planar)
 {
     int width;
     int height;
@@ -928,7 +947,7 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
     const struct egl_image_info img_info = {
         .width = width,
         .height = height,
-        .drm_format = DRM_FORMAT_ABGR8888,
+        .drm_format = planar ? DRM_FORMAT_NV12 : DRM_FORMAT_ABGR8888,
         .drm_modifier = DRM_FORMAT_MOD_INVALID,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
@@ -936,14 +955,36 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
     struct egl_image_map map;
     egl_map_image_storage(egl, img, &map);
 
-    for (int y = 0; y < height; y++) {
-        uint8_t *dst = map.planes[0] + map.row_strides[0] * y;
-        for (int x = 0; x < width; x++) {
-            memcpy(dst, ppm_data, 3);
-            dst[3] = 0xff;
+    if (map.plane_count != (planar ? 3 : 1))
+        egl_die("unexpected plane count");
 
-            ppm_data += 3;
-            dst += map.pixel_strides[0];
+    if (planar) {
+        for (int y = 0; y < height; y++) {
+            uint8_t *rows[3];
+            for (int i = 0; i < map.plane_count; i++)
+                rows[i] = map.planes[i] + map.row_strides[i] * y;
+
+            for (int x = 0; x < width; x++) {
+                uint8_t yuv[3];
+                egl_rgb_to_yuv(ppm_data, yuv);
+                ppm_data += 3;
+
+                for (int i = 0; i < map.plane_count; i++) {
+                    rows[i][0] = yuv[i];
+                    rows[i] += map.pixel_strides[i];
+                }
+            }
+        }
+    } else {
+        for (int y = 0; y < height; y++) {
+            uint8_t *dst = map.planes[0] + map.row_strides[0] * y;
+            for (int x = 0; x < width; x++) {
+                memcpy(dst, ppm_data, 3);
+                dst[3] = 0xff;
+
+                ppm_data += 3;
+                dst += map.pixel_strides[0];
+            }
         }
     }
 
