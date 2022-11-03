@@ -25,7 +25,7 @@ static const char image_rgb_test_vs[] = "#version 320 es\n"
 
 static const char image_rgb_test_fs[] =
     "#version 320 es\n"
-    "#extension GL_OES_EGL_image_external : require\n"
+    "#extension GL_OES_EGL_image_external_essl3 : require\n"
     "precision mediump float;\n"
     "layout(location = 1, binding = 0) uniform samplerExternalOES tex;\n"
     "layout(location = 0) in vec2 in_texcoord;\n"
@@ -33,7 +33,7 @@ static const char image_rgb_test_fs[] =
     "\n"
     "void main()\n"
     "{\n"
-    "    out_color = texture2D(tex, in_texcoord);\n"
+    "    out_color = texture(tex, in_texcoord);\n"
     "}\n";
 
 static const float image_rgb_test_vertices[4][5] = {
