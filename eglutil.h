@@ -167,6 +167,61 @@ egl_check(struct egl *egl, const char *where)
     }
 }
 
+static inline int
+egl_drm_format_to_cpp(int drm_format)
+{
+    switch (drm_format) {
+    case DRM_FORMAT_ABGR16161616F:
+        return 8;
+    case DRM_FORMAT_P010:
+        return 6;
+    case DRM_FORMAT_ABGR8888:
+    case DRM_FORMAT_XBGR8888:
+    case DRM_FORMAT_ABGR2101010:
+    case DRM_FORMAT_GR1616:
+        return 4;
+    case DRM_FORMAT_BGR888:
+    case DRM_FORMAT_NV12:
+        return 3;
+    case DRM_FORMAT_RGB565:
+    case DRM_FORMAT_GR88:
+    case DRM_FORMAT_R16:
+        return 2;
+    case DRM_FORMAT_R8:
+        return 1;
+    default:
+        egl_die("unsupported drm format 0x%x", drm_format);
+    }
+}
+
+static inline int
+egl_drm_format_to_plane_count(int drm_format)
+{
+    switch (drm_format) {
+    case DRM_FORMAT_P010:
+    case DRM_FORMAT_NV12:
+        return 2;
+    default:
+        return 1;
+    }
+}
+
+static inline int
+egl_drm_format_to_plane_format(int drm_format, int plane)
+{
+    if (plane >= egl_drm_format_to_plane_count(drm_format))
+        egl_die("bad plane");
+
+    switch (drm_format) {
+    case DRM_FORMAT_P010:
+        return plane ? DRM_FORMAT_GR1616 : DRM_FORMAT_R16;
+    case DRM_FORMAT_NV12:
+        return plane ? DRM_FORMAT_GR88 : DRM_FORMAT_R8;
+    default:
+        return drm_format;
+    }
+}
+
 #ifdef __ANDROID__
 
 static inline void
@@ -183,6 +238,9 @@ egl_cleanup_image_allocator(struct egl *egl)
 static inline enum AHardwareBuffer_Format
 egl_drm_format_to_ahb_format(int drm_format)
 {
+    /* sanity check */
+    egl_drm_format_to_cpp(drm_format);
+
     switch (drm_format) {
     case DRM_FORMAT_ABGR8888:
         return AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
@@ -198,11 +256,13 @@ egl_drm_format_to_ahb_format(int drm_format)
         return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
     case DRM_FORMAT_R8:
         return AHARDWAREBUFFER_FORMAT_BLOB;
+#if __ANDROID_API__ >= 29
     case DRM_FORMAT_NV12:
         /* there is no guarantee gralloc would pick NV12.. */
         return AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
     case DRM_FORMAT_P010:
         return AHARDWAREBUFFER_FORMAT_YCbCr_P010;
+#endif
     default:
         egl_die("unsupported drm format 0x%x", drm_format);
     }
@@ -258,6 +318,9 @@ egl_map_image_storage(struct egl *egl, const struct egl_image *img, struct egl_i
         map->pixel_strides[i] = planes.planes[i].pixelStride;
     }
 #else
+    if (egl_drm_format_to_plane_count(info->drm_format) > 1)
+        egl_die("no AHardwareBuffer_lockPlanes support");
+
     void *ptr;
     if (AHardwareBuffer_lock(img->storage.ahb, usage, -1, &rect, &ptr))
         egl_die("failed to lock ahb");
@@ -265,13 +328,14 @@ egl_map_image_storage(struct egl *egl, const struct egl_image *img, struct egl_i
     AHardwareBuffer_Desc desc;
     AHardwareBuffer_describe(img->storage.ahb, &desc);
 
-    /* TODO check format */
-    const int cpp = 4;
+    const int cpp = egl_drm_format_to_cpp(info->drm_format);
     map->plane_count = 1;
     map->planes[0] = ptr;
     map->row_strides[0] = desc.stride * cpp;
     map->pixel_strides[0] = cpp;
 #endif
+
+    map->bo_xfer = NULL;
 }
 
 static inline void
@@ -342,6 +406,17 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
     if (!bo)
         egl_die("failed to create gbm bo");
 
+    const int plane_count = gbm_bo_get_plane_count(bo);
+    if (plane_count > 1) {
+        /* make sure all planes have the same handle (for mapping) */
+        const union gbm_bo_handle handle = gbm_bo_get_handle_for_plane(bo, 0);
+        for (int i = 1; i < plane_count; i++) {
+            const union gbm_bo_handle h = gbm_bo_get_handle_for_plane(bo, i);
+            if (memcmp(&handle, &h, sizeof(h)))
+                egl_die("bo planes have different handles");
+        }
+    }
+
     img->storage.bo = bo;
 }
 
@@ -355,19 +430,40 @@ static inline void
 egl_map_image_storage(struct egl *egl, struct egl_image *img, struct egl_image_map *map)
 {
     const struct egl_image_info *info = &img->info;
-    struct egl_image_storage *storage = &img->storage;
+    struct gbm_bo *bo = img->storage.bo;
 
     uint32_t stride;
     void *xfer = NULL;
-    void *ptr = gbm_bo_map(storage->bo, 0, 0, info->width, info->height,
-                           GBM_BO_TRANSFER_READ_WRITE, &stride, &xfer);
+    void *ptr = gbm_bo_map(bo, 0, 0, info->width, info->height, GBM_BO_TRANSFER_READ_WRITE,
+                           &stride, &xfer);
     if (!ptr)
         egl_die("failed to map bo");
 
-    map->plane_count = 1;
-    map->planes[0] = ptr;
-    map->row_strides[0] = stride;
-    map->pixel_strides[0] = 4; /* TODO check format */
+    map->plane_count = egl_drm_format_to_plane_count(info->drm_format);
+    if (map->plane_count > 1) {
+        if (map->plane_count > gbm_bo_get_plane_count(bo))
+            egl_die("unexpected bo plane count");
+
+        for (int i = 0; i < map->plane_count; i++) {
+            map->planes[i] = ptr + gbm_bo_get_offset(bo, i);
+            map->row_strides[i] = gbm_bo_get_stride_for_plane(bo, i);
+            map->pixel_strides[i] =
+                egl_drm_format_to_cpp(egl_drm_format_to_plane_format(info->drm_format, i));
+        }
+
+        /* Y and UV */
+        if (map->plane_count == 2) {
+            map->plane_count = 3;
+            map->planes[2] = map->planes[1] + map->pixel_strides[1] / 2;
+            map->row_strides[2] = map->row_strides[1];
+            map->pixel_strides[2] = map->pixel_strides[1];
+        }
+    } else {
+        map->planes[0] = ptr;
+        map->row_strides[0] = stride;
+        map->pixel_strides[0] = egl_drm_format_to_cpp(info->drm_format);
+    }
+
     map->bo_xfer = xfer;
 }
 
