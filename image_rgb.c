@@ -9,6 +9,7 @@
 #include "image_rgb_test.ppm.inc"
 
 static const char image_rgb_test_vs[] = "#version 320 es\n"
+                                        "layout(location = 0) uniform mat4 tex_transform;\n"
                                         "layout(location = 0) in vec4 in_position;\n"
                                         "layout(location = 1) in vec4 in_texcoord;\n"
                                         "layout(location = 0) out vec2 out_texcoord;\n"
@@ -19,13 +20,13 @@ static const char image_rgb_test_vs[] = "#version 320 es\n"
                                         "void main()\n"
                                         "{\n"
                                         "    gl_Position = in_position;\n"
-                                        "    out_texcoord = in_texcoord.xy;\n"
+                                        "    out_texcoord = (tex_transform * in_texcoord).xy;\n"
                                         "}\n";
 
 static const char image_rgb_test_fs[] = "#version 320 es\n"
                                         "#extension GL_OES_EGL_image_external : require\n"
                                         "precision mediump float;\n"
-                                        "layout(binding = 0) uniform samplerExternalOES tex;\n"
+                                        "layout(location = 1, binding = 0) uniform samplerExternalOES tex;\n"
                                         "layout(location = 0) in vec2 in_texcoord;\n"
                                         "layout(location = 0) out vec4 out_color;\n"
                                         "\n"
@@ -63,6 +64,20 @@ static const float image_rgb_test_vertices[4][5] = {
         1.0f,
         1.0f,
     },
+};
+
+static const float image_rgb_test_tex_transform[4][4] = {
+#if 1
+    { 1.0f, 0.0f, 0.0f, 0.0f },
+    { 0.0f, 1.0f, 0.0f, 0.0f },
+    { 0.0f, 0.0f, 1.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 1.0f },
+#else
+    { 1.0f, 0.0f, 0.0f, 0.0f },
+    { 0.0f, -0.828125f, 0.0f, 0.0f },
+    { 0.0f, 0.0f, 1.0f, 0.0f },
+    { 0.0f, 0.8359375f, 0.0f, 1.0f },
+#endif
 };
 
 struct image_rgb_test {
@@ -132,10 +147,10 @@ image_rgb_test_draw(struct image_rgb_test *test)
     egl_check(egl, "clear");
 
     gl->UseProgram(test->prog->prog);
+    gl->ActiveTexture(GL_TEXTURE0);
     gl->BindTexture(test->tex_target, test->tex);
 
-    gl->Uniform1i(0, 0);
-    gl->ActiveTexture(GL_TEXTURE0);
+    gl->UniformMatrix4fv(0, 1, false, (const float *)image_rgb_test_tex_transform);
 
     gl->VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(image_rgb_test_vertices[0]),
                             image_rgb_test_vertices);
