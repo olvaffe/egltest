@@ -481,32 +481,49 @@ egl_image_to_dma_buf_attrs(const struct egl_image *img, EGLAttrib *attrs, int co
     const struct egl_image_info *info = &img->info;
     struct gbm_bo *bo = img->storage.bo;
 
-    const int fd = gbm_bo_get_fd_for_plane(bo, 0);
-    if (fd < 0)
-        egl_die("failed to export gbm bo");
-    const int stride = gbm_bo_get_stride_for_plane(bo, 0);
-
     assert(count >= 64);
     int c = 0;
     attrs[c++] = EGL_IMAGE_PRESERVED;
     attrs[c++] = EGL_TRUE;
-    attrs[c++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-    attrs[c++] = fd;
-    attrs[c++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-    attrs[c++] = 0;
     attrs[c++] = EGL_WIDTH;
     attrs[c++] = info->width;
     attrs[c++] = EGL_HEIGHT;
     attrs[c++] = info->height;
-    attrs[c++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-    attrs[c++] = stride;
     attrs[c++] = EGL_LINUX_DRM_FOURCC_EXT;
     attrs[c++] = info->drm_format;
-    attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-    attrs[c++] = (EGLAttrib)info->drm_modifier;
-    attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-    attrs[c++] = (EGLAttrib)(info->drm_modifier >> 32);
-    attrs[c++] = EGL_NONE, assert(c <= count);
+
+    const int fd = gbm_bo_get_fd_for_plane(bo, 0);
+    if (fd < 0)
+        egl_die("failed to export gbm bo");
+    const int plane_count = gbm_bo_get_plane_count(bo);
+    for (int i = 0; i < plane_count; i++) {
+        const int offset = gbm_bo_get_offset(bo, i);
+        const int stride = gbm_bo_get_stride_for_plane(bo, i);
+
+        static_assert(GBM_MAX_PLANES <= 4, "");
+        if (i < 3) {
+            attrs[c++] = EGL_DMA_BUF_PLANE0_FD_EXT + 3 * i;
+            attrs[c++] = fd;
+            attrs[c++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT + 3 * i;
+            attrs[c++] = offset;
+            attrs[c++] = EGL_DMA_BUF_PLANE0_PITCH_EXT + 3 * i;
+            attrs[c++] = stride;
+        } else {
+            attrs[c++] = EGL_DMA_BUF_PLANE3_FD_EXT;
+            attrs[c++] = fd;
+            attrs[c++] = EGL_DMA_BUF_PLANE3_OFFSET_EXT;
+            attrs[c++] = offset;
+            attrs[c++] = EGL_DMA_BUF_PLANE3_PITCH_EXT;
+            attrs[c++] = stride;
+        }
+        attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT + 2 * i;
+        attrs[c++] = (EGLAttrib)info->drm_modifier;
+        attrs[c++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT + 2 * i;
+        attrs[c++] = (EGLAttrib)(info->drm_modifier >> 32);
+    }
+
+    attrs[c++] = EGL_NONE;
+    assert(c <= count);
 
     return fd;
 }
