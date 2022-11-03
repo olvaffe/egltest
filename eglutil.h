@@ -110,7 +110,9 @@ struct egl_image_info {
     int height;
     int drm_format;
 
-    bool mappable;
+    bool mapping;
+    bool rendering;
+    bool sampling;
     bool force_linear;
 };
 
@@ -289,9 +291,13 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
         egl_log("cannot force linear in AHB");
 
     const enum AHardwareBuffer_Format format = egl_drm_format_to_ahb_format(info->drm_format);
-    const uint64_t usage =
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY |
-        AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+    uint64_t usage = 0;
+    if (info->mapping)
+        usage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+    if (info->rendering)
+        usage |= AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER;
+    if (info->sampling)
+        usage |= AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
 
     const AHardwareBuffer_Desc desc = {
         .width = info->width,
@@ -1081,7 +1087,9 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
         .width = width,
         .height = height,
         .drm_format = planar ? DRM_FORMAT_NV12 : DRM_FORMAT_ABGR8888,
-        .mappable = true,
+        .mapping = true,
+        .rendering = false,
+        .sampling = true,
         .force_linear = false,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
