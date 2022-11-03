@@ -395,13 +395,22 @@ static inline void
 egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
 {
     const struct egl_image_info *info = &img->info;
+    /* This is only to make minigbm happy.
+     *
+     * mesa gbm does not support planar.  When the format is planar, it must
+     * be minigbm and GBM_BO_USE_PROTECTED (bit 5) means GBM_BO_USE_TEXTURING
+     * to minigbm instead.
+     */
+    const uint32_t minigbm_flags = egl_drm_format_to_plane_count(info->drm_format) > 1
+                                       ? GBM_BO_USE_PROTECTED
+                                       : GBM_BO_USE_RENDERING;
 
     struct gbm_bo *bo;
     if (info->drm_modifier != DRM_FORMAT_MOD_INVALID) {
         bo = gbm_bo_create_with_modifiers2(egl->gbm, info->width, info->height, info->drm_format,
-                                           &info->drm_modifier, 1, 0);
+                                           &info->drm_modifier, 1, minigbm_flags);
     } else {
-        bo = gbm_bo_create(egl->gbm, info->width, info->height, info->drm_format, 0);
+        bo = gbm_bo_create(egl->gbm, info->width, info->height, info->drm_format, minigbm_flags);
     }
     if (!bo)
         egl_die("failed to create gbm bo");
