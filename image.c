@@ -5,36 +5,17 @@
 
 #include "eglutil.h"
 
-/* for image_test_ppm_data */
+static const char image_test_vs[] = {
+#include "image_test.vert.inc"
+};
+
+static const char image_test_fs[] = {
+#include "image_test.frag.inc"
+};
+
+static const unsigned char image_test_ppm[] = {
 #include "image_test.ppm.inc"
-
-static const char image_test_vs[] = "#version 320 es\n"
-                                    "layout(location = 0) uniform mat4 tex_transform;\n"
-                                    "layout(location = 0) in vec4 in_position;\n"
-                                    "layout(location = 1) in vec4 in_texcoord;\n"
-                                    "layout(location = 0) out vec2 out_texcoord;\n"
-                                    "out gl_PerVertex {\n"
-                                    "   vec4 gl_Position;\n"
-                                    "};\n"
-                                    "\n"
-                                    "void main()\n"
-                                    "{\n"
-                                    "    gl_Position = in_position;\n"
-                                    "    out_texcoord = (tex_transform * in_texcoord).xy;\n"
-                                    "}\n";
-
-static const char image_test_fs[] =
-    "#version 320 es\n"
-    "#extension GL_OES_EGL_image_external_essl3 : require\n"
-    "precision mediump float;\n"
-    "layout(location = 1, binding = 0) uniform samplerExternalOES tex;\n"
-    "layout(location = 0) in vec2 in_texcoord;\n"
-    "layout(location = 0) out vec4 out_color;\n"
-    "\n"
-    "void main()\n"
-    "{\n"
-    "    out_color = texture(tex, in_texcoord);\n"
-    "}\n";
+};
 
 static const float image_test_vertices[4][5] = {
     {
@@ -121,8 +102,8 @@ image_test_init(struct image_test *test)
     test->prog = egl_create_program(egl, image_test_vs, image_test_fs);
 
     egl_log("loading ppm as a %s image", test->planar ? "planar" : "non-planar");
-    test->img = egl_create_image_from_ppm(egl, image_test_ppm_data, sizeof(image_test_ppm_data),
-                                          test->planar);
+    test->img =
+        egl_create_image_from_ppm(egl, image_test_ppm, sizeof(image_test_ppm), test->planar);
     gl->EGLImageTargetTexture2DOES(test->tex_target, test->img->img);
 
     egl_check(egl, "init");
