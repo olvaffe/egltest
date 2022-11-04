@@ -1079,7 +1079,7 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
     int height;
     ppm_data = egl_parse_ppm(ppm_data, ppm_size, &width, &height);
 
-    if (planar && !egl->is_minigbm)
+    if (planar && egl->gbm && !egl->is_minigbm)
         egl_die("only minigbm supports planar formats");
 
     const struct egl_image_info img_info = {
