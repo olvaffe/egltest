@@ -1094,8 +1094,12 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
         /* When mapping, gbm or gralloc is supposed to give us a linear view
          * even when the image is tiled.  But minigbm can be an exception
          * sometimes and we would need to set this to true instead.
+         *
+         * Also, minigbm's amdgpu uses DRI and does not support
+         * DRM_FORMAT_NV12.  Forcing linear forces minigbm to use its own
+         * allocation code.
          */
-        .force_linear = false,
+        .force_linear = true,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
 
