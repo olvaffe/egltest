@@ -87,6 +87,7 @@ struct egl {
 
     struct gbm_device *gbm;
     int gbm_fd;
+    bool is_minigbm;
 
     EGLConfig config;
     EGLSurface surf;
@@ -400,6 +401,18 @@ egl_init_image_allocator(struct egl *egl)
     egl->gbm = gbm_create_device(egl->gbm_fd);
     if (!egl->gbm)
         egl_die("failed to create gbm device");
+
+    /* mesa gbm uses DRI and does not support planar formats (it can import
+     * but cannot allocate).  GBM_BO_USE_PROTECTED is bit 5 which is
+     * GBM_BO_USE_TEXTURING to minigbm.
+     */
+    struct gbm_bo *test = gbm_bo_create(egl->gbm, 4, 4, DRM_FORMAT_NV12, GBM_BO_USE_PROTECTED);
+    if (test) {
+        gbm_bo_destroy(test);
+
+        egl_log("detected minigbm");
+        egl->is_minigbm = true;
+    }
 }
 
 static inline void
@@ -439,30 +452,13 @@ egl_alloc_image_storage(struct egl *egl, struct egl_image *img)
     if (!fmt)
         egl_die("unsupported drm format 0x%08x", info->drm_format);
 
-    uint64_t drm_modifiers[32];
-    int drm_modifier_count = 0;
-
+    const uint64_t *drm_modifiers = fmt->drm_modifiers;
+    int drm_modifier_count = fmt->drm_modifier_count;
     if (info->force_linear) {
-        if (!egl_find_modifier(fmt, DRM_FORMAT_MOD_LINEAR))
+        drm_modifiers = egl_find_modifier(fmt, DRM_FORMAT_MOD_LINEAR);
+        if (!drm_modifiers)
             egl_die("failed to find linear modifier");
-
-        drm_modifiers[0] = DRM_FORMAT_MOD_LINEAR;
         drm_modifier_count = 1;
-    } else {
-        for (int i = 0; i < fmt->drm_modifier_count; i++) {
-            const uint64_t mod = fmt->drm_modifiers[i];
-
-            /* skip modifiers that minigbm does not know how to map */
-            bool skip = false;
-            if (fourcc_mod_is_vendor(mod, INTEL))
-                skip = mod >= I915_FORMAT_MOD_Y_TILED_CCS;
-
-            if (!skip) {
-                drm_modifiers[drm_modifier_count++] = mod;
-                if (drm_modifier_count == ARRAY_SIZE(drm_modifiers))
-                    break;
-            }
-        }
     }
 
     struct gbm_bo *bo = gbm_bo_create_with_modifiers(
@@ -1083,6 +1079,9 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
     int height;
     ppm_data = egl_parse_ppm(ppm_data, ppm_size, &width, &height);
 
+    if (planar && !egl->is_minigbm)
+        egl_die("only minigbm supports planar formats");
+
     const struct egl_image_info img_info = {
         .width = width,
         .height = height,
@@ -1092,14 +1091,15 @@ egl_create_image_from_ppm(struct egl *egl, const void *ppm_data, size_t ppm_size
         .sampling = true,
 
         /* When mapping, gbm or gralloc is supposed to give us a linear view
-         * even when the image is tiled.  But minigbm can be an exception
-         * sometimes and we would need to set this to true instead.
+         * even when the image is tiled.  mesa gbm does not support planar
+         * formats.  minigbm has quirks:
          *
-         * Also, minigbm's amdgpu uses DRI and does not support
-         * DRM_FORMAT_NV12.  Forcing linear forces minigbm to use its own
-         * allocation code.
+         *  - its i915 backend can pick modifiers with compressions and refuse
+         *    to map them
+         *  - its amdgpu backend uses DRI unless we force linear
+         *  - its msm backend does not give a linear view
          */
-        .force_linear = true,
+        .force_linear = egl->is_minigbm,
     };
     struct egl_image *img = egl_create_image(egl, &img_info);
 
