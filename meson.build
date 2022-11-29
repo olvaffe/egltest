@@ -39,6 +39,7 @@ tests = [
   'clear',
   'formats',
   'image',
+  'info',
 ]
 
 foreach t : tests
