@@ -6,6 +6,9 @@
 #ifndef EGLUTIL_H
 #define EGLUTIL_H
 
+#define EGL_EGL_PROTOTYPES 0
+#define GL_GLES_PROTOTYPES 0
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -968,6 +971,37 @@ egl_dump_image(struct egl *egl, int width, int height, const char *filename)
     egl_write_ppm(filename, data, width, height);
 
     free(data);
+}
+
+static inline void
+egl_teximage_2d_from_ppm(struct egl *egl, GLenum target, const void *ppm_data, size_t ppm_size)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    int width;
+    int height;
+    ppm_data = egl_parse_ppm(ppm_data, ppm_size, &width, &height);
+
+    void *texels = malloc(width * height * 4);
+    if (!texels)
+        egl_die("failed to alloc texels");
+
+    const uint8_t *rgb = ppm_data;
+    uint8_t *rgba = texels;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            rgba[0] = rgb[0];
+            rgba[1] = rgb[1];
+            rgba[2] = rgb[2];
+            rgba[3] = 0xff;
+            rgba += 4;
+            rgb += 3;
+        }
+    }
+
+    gl->TexImage2D(target, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+
+    free(texels);
 }
 
 static inline GLuint
