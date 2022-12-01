@@ -9,7 +9,7 @@ layout(location = 0) in vec2 in_position;
 layout(location = 1) in vec2 in_texcoord;
 layout(location = 2) in mediump vec4 in_color;
 
-layout(location = 0) flat out mediump vec4 out_color;
+layout(location = 0) out mediump vec4 out_color;
 layout(location = 1) out vec2 out_texcoord;
 
 out gl_PerVertex {
