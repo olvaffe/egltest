@@ -695,8 +695,13 @@ egl_init_display(struct egl *egl)
         egl->dev = EGL_NO_DEVICE_EXT;
         for (int i = 0; i < count; i++) {
             const char *exts = egl->QueryDeviceStringEXT(devs[i], EGL_EXTENSIONS);
-            /* EGL_EXT_device_drm_render_node and not EGL_MESA_device_software (unless swrast) */
-            if (strstr(exts, "EGL_EXT_device_drm_render_node") && !strstr(exts, "software")) {
+
+            /* EGL_EXT_device_drm_render_node */
+            if (!strstr(exts, "EGL_EXT_device_drm_render_node"))
+                continue;
+
+            const bool swrast = strstr(exts, "software");
+            if (!swrast) {
                 egl->dev = devs[i];
                 break;
             }
