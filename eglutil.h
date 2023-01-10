@@ -396,7 +396,12 @@ egl_init_image_allocator(struct egl *egl)
     if (egl->dev == EGL_NO_DEVICE_EXT)
         egl_die("gbm requires EGLDeviceEXT");
 
+    egl->gbm_fd = -1;
+
     const char *node = egl->QueryDeviceStringEXT(egl->dev, EGL_DRM_RENDER_NODE_FILE_EXT);
+    if (!node)
+        return;
+
     egl->gbm_fd = open(node, O_RDWR | O_CLOEXEC);
     if (egl->gbm_fd < 0)
         egl_die("failed to open %s", node);
@@ -421,8 +426,10 @@ egl_init_image_allocator(struct egl *egl)
 static inline void
 egl_cleanup_image_allocator(struct egl *egl)
 {
-    gbm_device_destroy(egl->gbm);
-    close(egl->gbm_fd);
+    if (egl->gbm) {
+        gbm_device_destroy(egl->gbm);
+        close(egl->gbm_fd);
+    }
 }
 
 static inline const struct egl_format *
@@ -688,7 +695,7 @@ egl_init_display(struct egl *egl)
         egl->dev = EGL_NO_DEVICE_EXT;
         for (int i = 0; i < count; i++) {
             const char *exts = egl->QueryDeviceStringEXT(devs[i], EGL_EXTENSIONS);
-            /* EGL_EXT_device_drm_render_node and not EGL_MESA_device_software */
+            /* EGL_EXT_device_drm_render_node and not EGL_MESA_device_software (unless swrast) */
             if (strstr(exts, "EGL_EXT_device_drm_render_node") && !strstr(exts, "software")) {
                 egl->dev = devs[i];
                 break;
