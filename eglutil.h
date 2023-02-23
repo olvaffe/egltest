@@ -424,14 +424,8 @@ egl_init_image_allocator(struct egl *egl)
     if (!egl->gbm)
         egl_die("failed to create gbm device");
 
-    /* mesa gbm uses DRI and does not support planar formats (it can import
-     * but cannot allocate).  Bit 5 is GBM_BO_USE_PROTECTED on mesa gbm and
-     * GBM_BO_USE_TEXTURING on minigbm.
-     */
-    struct gbm_bo *test = gbm_bo_create(egl->gbm, 4, 4, DRM_FORMAT_NV12, 1 << 5);
-    if (test) {
-        gbm_bo_destroy(test);
-
+    const char *gbm_name = gbm_device_get_backend_name(egl->gbm);
+    if (strcmp(gbm_name, "drm")) {
         egl_log("detected minigbm");
         egl->is_minigbm = true;
     }
