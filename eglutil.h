@@ -121,11 +121,18 @@ struct egl_image_info {
 };
 
 struct egl_image_storage {
+#ifdef __ANDROID__
     AHardwareBuffer *ahb;
+#else
     struct gbm_bo *bo;
+#endif
 };
 
 struct egl_image_map {
+    /* This can be different from gbm_bo_get_plane_count or
+     * egl_drm_format_to_plane_count.  An RGB-format always has 1 plane.  A
+     * YUV format always has 3 planes.
+     */
     int plane_count;
     void *planes[3];
     int row_strides[3];
@@ -191,15 +198,12 @@ egl_drm_format_to_cpp(int drm_format)
     switch (drm_format) {
     case DRM_FORMAT_ABGR16161616F:
         return 8;
-    case DRM_FORMAT_P010:
-        return 6;
     case DRM_FORMAT_ABGR8888:
     case DRM_FORMAT_XBGR8888:
     case DRM_FORMAT_ABGR2101010:
     case DRM_FORMAT_GR1616:
         return 4;
     case DRM_FORMAT_BGR888:
-    case DRM_FORMAT_NV12:
         return 3;
     case DRM_FORMAT_RGB565:
     case DRM_FORMAT_GR88:
@@ -207,6 +211,11 @@ egl_drm_format_to_cpp(int drm_format)
         return 2;
     case DRM_FORMAT_R8:
         return 1;
+    case DRM_FORMAT_P010:
+    case DRM_FORMAT_NV12:
+    case DRM_FORMAT_YVU420:
+        /* cpp makes no sense to planar formats */
+        return 0;
     default:
         egl_die("unsupported drm format 0x%x", drm_format);
     }
@@ -216,6 +225,8 @@ static inline int
 egl_drm_format_to_plane_count(int drm_format)
 {
     switch (drm_format) {
+    case DRM_FORMAT_YVU420:
+        return 3;
     case DRM_FORMAT_P010:
     case DRM_FORMAT_NV12:
         return 2;
@@ -231,6 +242,8 @@ egl_drm_format_to_plane_format(int drm_format, int plane)
         egl_die("bad plane");
 
     switch (drm_format) {
+    case DRM_FORMAT_YVU420:
+        return DRM_FORMAT_R8;
     case DRM_FORMAT_P010:
         return plane ? DRM_FORMAT_GR1616 : DRM_FORMAT_R16;
     case DRM_FORMAT_NV12:
@@ -276,7 +289,8 @@ egl_drm_format_to_ahb_format(int drm_format)
         return AHARDWAREBUFFER_FORMAT_BLOB;
 #if __ANDROID_API__ >= 29
     case DRM_FORMAT_NV12:
-        /* there is no guarantee gralloc would pick NV12.. */
+    case DRM_FORMAT_YVU420:
+        /* there is no guarantee gralloc would pick NV12 or YVU420.. */
         return AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
     case DRM_FORMAT_P010:
         return AHARDWAREBUFFER_FORMAT_YCbCr_P010;
