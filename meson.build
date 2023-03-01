@@ -23,6 +23,7 @@ warning_args = cc.get_supported_arguments([
 
 dep_dl = cc.find_library('dl')
 dep_m = cc.find_library('m', required: false)
+dep_sdl2 = dependency('sdl2', required: false)
 dep_nativewindow = cc.find_library('nativewindow', required: host_machine.system() == 'android')
 
 dep_gbm = dependency('gbm', required: host_machine.system() != 'android')
@@ -42,6 +43,10 @@ tests = [
   'info',
   'tex',
 ]
+
+if dep_sdl2.found()
+  tests += ['sdl']
+endif
 
 foreach t : tests
   test_incs = []
@@ -63,9 +68,14 @@ foreach t : tests
     endif
   endforeach
 
+  test_deps = [idep_eglutil]
+  if t == 'sdl'
+    test_deps += [dep_sdl2]
+  endif
+
   executable(
     t,
     sources: [t + '.c', test_incs],
-    dependencies: [idep_eglutil],
+    dependencies: test_deps,
   )
 endforeach
