@@ -10,7 +10,7 @@ main(void)
 {
     struct egl egl;
 
-    egl_init(&egl, 0, 0);
+    egl_init(&egl, NULL);
 
     egl_log("client EGL_EXTENSIONS: %s", egl.QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS));
     egl_log("--");

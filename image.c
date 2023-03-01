@@ -84,7 +84,11 @@ image_test_init(struct image_test *test)
     struct egl *egl = &test->egl;
     struct egl_gl *gl = &egl->gl;
 
-    egl_init(egl, test->width, test->height);
+    const struct egl_init_params params = {
+        .pbuffer_width = test->width,
+        .pbuffer_height = test->height,
+    };
+    egl_init(egl, &params);
 
     if (!strstr(egl->gl_exts, "GL_OES_EGL_image_external"))
         egl_die("no GL_OES_EGL_image_external");

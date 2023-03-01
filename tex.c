@@ -79,7 +79,11 @@ tex_test_init(struct tex_test *test)
     struct egl *egl = &test->egl;
     struct egl_gl *gl = &egl->gl;
 
-    egl_init(egl, test->width, test->height);
+    const struct egl_init_params params = {
+        .pbuffer_width = test->width,
+        .pbuffer_height = test->height,
+    };
+    egl_init(egl, &params);
 
     gl->GenTextures(1, &test->tex);
     gl->BindTexture(GL_TEXTURE_2D, test->tex);

@@ -65,7 +65,14 @@ struct egl_format {
     const EGLBoolean *external_only;
 };
 
+struct egl_init_params {
+    EGLint pbuffer_width;
+    EGLint pbuffer_height;
+};
+
 struct egl {
+    struct egl_init_params params;
+
     struct {
         void *handle;
 
@@ -751,9 +758,9 @@ egl_init_display(struct egl *egl)
 }
 
 static inline void
-egl_init_config_and_surface(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
+egl_init_config_and_surface(struct egl *egl)
 {
-    const bool with_pbuffer = pbuffer_width && pbuffer_height;
+    const bool with_pbuffer = egl->params.pbuffer_width && egl->params.pbuffer_height;
     if (egl->KHR_no_config_context && !with_pbuffer) {
         egl_log("using EGL_NO_CONFIG_KHR");
         egl->config = EGL_NO_CONFIG_KHR;
@@ -787,7 +794,7 @@ egl_init_config_and_surface(struct egl *egl, EGLint pbuffer_width, EGLint pbuffe
     }
 
     const EGLint surf_attrs[] = {
-        EGL_WIDTH, pbuffer_width, EGL_HEIGHT, pbuffer_height, EGL_NONE,
+        EGL_WIDTH, egl->params.pbuffer_width, EGL_HEIGHT, egl->params.pbuffer_height, EGL_NONE,
     };
 
     egl->surf = egl->CreatePbufferSurface(egl->dpy, egl->config, surf_attrs);
@@ -873,9 +880,12 @@ egl_init_gl(struct egl *egl)
 }
 
 static inline void
-egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
+egl_init(struct egl *egl, const struct egl_init_params *params)
 {
     memset(egl, 0, sizeof(*egl));
+
+    if (params)
+        egl->params = *params;
 
     egl_init_library(egl);
     egl_check(egl, "init library");
@@ -886,7 +896,7 @@ egl_init(struct egl *egl, EGLint pbuffer_width, EGLint pbuffer_height)
     egl_init_image_allocator(egl);
     egl_check(egl, "init image allocator");
 
-    egl_init_config_and_surface(egl, pbuffer_width, pbuffer_height);
+    egl_init_config_and_surface(egl);
     egl_check(egl, "init config and surface");
 
     egl_init_context(egl);

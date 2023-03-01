@@ -18,7 +18,11 @@ struct clear_test {
 static void
 clear_test_init(struct clear_test *test)
 {
-    egl_init(&test->egl, test->width, test->height);
+    const struct egl_init_params params = {
+        .pbuffer_width = test->width,
+        .pbuffer_height = test->height,
+    };
+    egl_init(&test->egl, &params);
 }
 
 static void
