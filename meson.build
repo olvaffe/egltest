@@ -42,6 +42,7 @@ tests = [
   'image',
   'info',
   'tex',
+  'tri',
 ]
 
 if dep_sdl2.found()
