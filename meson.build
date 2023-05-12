@@ -42,6 +42,7 @@ tests = [
   'image',
   'info',
   'tex',
+  'timestamp',
   'tri',
 ]
 
