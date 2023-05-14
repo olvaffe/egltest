@@ -121,17 +121,27 @@ timestamp_test_draw(struct timestamp_test *test)
     gl->QueryCounterEXT(test->query_end, GL_TIMESTAMP_EXT);
     egl_check(egl, "draw");
 
+    GLint64 get_begin;
+    GLint64 get_end;
     const uint64_t cpu_begin = get_time_ns();
+    gl->GetInteger64v(GL_TIMESTAMP_EXT, &get_begin);
     gl->Finish();
     const uint64_t cpu_end = get_time_ns();
+    gl->GetInteger64v(GL_TIMESTAMP_EXT, &get_end);
 
     GLint64 gpu_begin;
     GLint64 gpu_end;
     gl->GetQueryObjecti64vEXT(test->query_begin, GL_QUERY_RESULT, &gpu_begin);
     gl->GetQueryObjecti64vEXT(test->query_end, GL_QUERY_RESULT, &gpu_end);
 
-    egl_log("cpu time %dms, gpu time %dms", (int)(cpu_end - cpu_begin) / 1000000,
-            (int)(gpu_end - gpu_begin) / 1000000);
+    egl_log("cpu time %dms, gpu time %dms, get time %dms", (int)(cpu_end - cpu_begin) / 1000000,
+            (int)(gpu_end - gpu_begin) / 1000000, (int)(get_end - get_begin) / 1000000);
+
+    egl_log("get begin %d.%09ds < gpu begin %d.%09ds < gpu end %d.%09d < get end %d.%09d",
+            (int)(get_begin / 1000000000), (int)(get_begin % 1000000000),
+            (int)(gpu_begin / 1000000000), (int)(gpu_begin % 1000000000),
+            (int)(gpu_end / 1000000000), (int)(gpu_end % 1000000000), (int)(get_end / 1000000000),
+            (int)(get_end % 1000000000));
 }
 
 int
