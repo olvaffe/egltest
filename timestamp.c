@@ -142,6 +142,21 @@ timestamp_test_draw(struct timestamp_test *test)
             (int)(gpu_begin / 1000000000), (int)(gpu_begin % 1000000000),
             (int)(gpu_end / 1000000000), (int)(gpu_end % 1000000000), (int)(get_end / 1000000000),
             (int)(get_end % 1000000000));
+
+    if (true) {
+        const int loop_count = 10;
+        const int loop_delay = 200;
+        egl_log("Calling glGetInteger64v(GL_TIMESTAMP_EXT) %d times with %dms delay", loop_count,
+                loop_delay);
+        for (int i = 0; i < loop_count; i++) {
+            GLint64 gpu_now;
+
+            gl->GetInteger64v(GL_TIMESTAMP_EXT, &gpu_now);
+            egl_log("gpu time is %d.%09ds", (int)(gpu_now / 1000000000),
+                    (int)(gpu_now % 1000000000));
+            usleep(loop_delay * 1000);
+        }
+    }
 }
 
 int
