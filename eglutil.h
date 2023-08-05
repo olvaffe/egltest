@@ -110,6 +110,11 @@ struct egl {
     const char *gl_exts;
 };
 
+struct egl_framebuffer {
+    GLuint fbo;
+    GLuint tex;
+};
+
 struct egl_program {
     GLuint vs;
     GLuint fs;
@@ -922,7 +927,8 @@ egl_cleanup(struct egl *egl)
 
     egl->MakeCurrent(egl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     egl->DestroyContext(egl->dpy, egl->ctx);
-    egl->DestroySurface(egl->dpy, egl->surf);
+    if (egl->surf != EGL_NO_SURFACE)
+        egl->DestroySurface(egl->dpy, egl->surf);
 
     egl_cleanup_image_allocator(egl);
 
@@ -1032,6 +1038,47 @@ egl_teximage_2d_from_ppm(struct egl *egl, GLenum target, const void *ppm_data, s
     gl->TexImage2D(target, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
 
     free(texels);
+}
+
+static inline struct egl_framebuffer *
+egl_create_framebuffer(struct egl *egl, int width, int height)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    struct egl_framebuffer *fb = calloc(1, sizeof(*fb));
+    if (!fb)
+        egl_die("failed to alloc fb");
+
+    const GLenum target = GL_FRAMEBUFFER;
+    const GLenum textarget = GL_TEXTURE_2D;
+    const GLenum att = GL_COLOR_ATTACHMENT0;
+
+    gl->GenTextures(1, &fb->tex);
+    gl->BindTexture(textarget, fb->tex);
+    gl->TexStorage2D(textarget, 1, GL_RGBA8, width, height);
+    gl->BindTexture(textarget, 0);
+
+    gl->GenFramebuffers(1, &fb->fbo);
+    gl->BindFramebuffer(target, fb->fbo);
+    gl->FramebufferTexture(target, att, fb->tex, 0);
+
+    if (gl->CheckFramebufferStatus(target) != GL_FRAMEBUFFER_COMPLETE)
+        egl_die("incomplete fbo");
+
+    gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return fb;
+}
+
+static inline void
+egl_destroy_framebuffer(struct egl *egl, struct egl_framebuffer *fb)
+{
+    struct egl_gl *gl = &egl->gl;
+
+    gl->DeleteTextures(1, &fb->tex);
+    gl->DeleteFramebuffers(1, &fb->fbo);
+
+    free(fb);
 }
 
 static inline GLuint
