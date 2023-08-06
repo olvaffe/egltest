@@ -39,7 +39,7 @@ static const float multithread_test_vertices[4][2] = {
     },
 };
 
-#define IMAGE_COUNT 3
+#define IMAGE_COUNT 2
 
 struct multithread_test {
     uint32_t width;
@@ -219,6 +219,7 @@ multithread_test_draw_produce(struct multithread_test *test, int idx)
             .drm_format = DRM_FORMAT_ABGR8888,
             .rendering = true,
             .sampling = true,
+            .force_linear = true,
         };
         img = egl_create_image(egl, &info);
 
@@ -250,8 +251,10 @@ multithread_test_draw_produce(struct multithread_test *test, int idx)
         if (gl->CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
             egl_die("incomplete fbo");
 
+#if 0
         gl->Clear(GL_COLOR_BUFFER_BIT);
         egl_check(egl, "clear");
+#endif
 
         gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
         gl->DeleteFramebuffers(1, &fbo);
