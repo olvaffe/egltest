@@ -42,6 +42,7 @@ tests = [
   'formats',
   'image',
   'info',
+  'multithread',
   'tex',
   'timestamp',
   'tri',
